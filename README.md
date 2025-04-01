@@ -79,8 +79,7 @@ The application requires the following Python packages:
 - In the application, use the default URL (http://localhost:11434) or modify if Ollama is running elsewhere on the network
 - Click "Refresh Models" to load your installed Ollama models
 
-### Setting up Google Gemini
-
+#### Setting up Google Gemini 
 - Go to the "Settings" tab.
 - Select "Gemini (Google)" from the provider dropdown.
 - Enter your Google Gemini API key.
