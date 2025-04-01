@@ -1,6 +1,6 @@
 # PyChat: Your All-in-One AI Chat Client 🤖💬
 
-[![Screenshot](screenshot.png)](images/screenshot.png)  
+[![Screenshot](screenshot.png)](screenshot.png)  
 
 Tired of juggling multiple AI platforms? PyChat is a versatile desktop application that brings the power of **OpenAI (GPT-4, GPT-3.5), Anthropic Claude (Claude 3 Opus, Sonnet, Haiku), Ollama (local models), and Google Gemini** into a single, user-friendly interface. Enjoy seamless conversations, code highlighting, and advanced features, all within a sleek PyQt5 application.
 
