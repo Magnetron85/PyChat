@@ -1,191 +1,216 @@
-# PyChat: Your All-in-One AI Chat Client 🤖💬
+<h1 style="font-size: 3em; margin-bottom: 0.5em;">PyChat: Your All-in-One AI Chat Client 🤖💬</h1>
 
-[![Screenshot](screenshot.png)](screenshot.png)
+<p align="center">
+  <a href="screenshot.png">
+    <img src="screenshot.png" alt="Screenshot" style="max-width: 100%; height: auto;">
+  </a>
+</p>
 
-Tired of juggling multiple AI platforms? PyChat is a versatile desktop application that unifies **OpenAI (GPT-4, GPT-3.5), Anthropic Claude, Ollama, and Google Gemini** in a sleek, user-friendly PyQt5 interface.
+<p style="font-size: 1.2em;">Tired of juggling multiple AI platforms? PyChat is a versatile desktop application that unifies <strong>OpenAI (GPT-4, GPT-3.5), Anthropic Claude, Ollama, and Google Gemini</strong> in a sleek, user-friendly PyQt5 interface.</p>
 
----
+<hr>
 
-## Table of Contents
-- [Features](#features)
-- [Data & Security](#data--security)
-- [Dependencies](#dependencies)
-- [Installation](#installation)
-- [Setup](#setup)
-  - [OpenAI](#setting-up-openai)
-  - [Anthropic Claude](#setting-up-anthropic-claude)
-  - [Ollama](#setting-up-ollama)
-  - [Google Gemini](#setting-up-google-gemini)
-- [Usage](#usage)
-  - [Preprompts](#preprompts)
-  - [Sending Messages](#sending-messages)
-  - [Conversation Management](#conversation-management)
-  - [Saving Conversations](#saving-conversations)
-  - [Model Management](#model-management)
-- [Troubleshooting](#troubleshooting)
-- [Data Cleanup](#data-cleanup)
-- [License](#license)
+<h2 style="font-size: 2.5em;">Table of Contents</h2>
+<ul style="font-size: 1.2em;">
+  <li><a href="#features">Features</a></li>
+  <li><a href="#data-and-security">Data &amp; Security</a></li>
+  <li><a href="#dependencies">Dependencies</a></li>
+  <li><a href="#installation">Installation</a></li>
+  <li><a href="#setup">Setup</a></li>
+  <li><a href="#usage">Usage</a></li>
+  <li><a href="#troubleshooting">Troubleshooting</a></li>
+  <li><a href="#data-cleanup">Data Cleanup</a></li>
+  <li><a href="#license">License</a></li>
+</ul>
 
----
+<hr>
 
-## Features
+<h2 id="features" style="font-size: 2.5em;">Features</h2>
+<ul style="font-size: 1.2em;">
+  <li><strong>Multi-Provider Support</strong>
+    <ul>
+      <li>OpenAI (GPT-4, GPT-3.5, etc.)</li>
+      <li>Anthropic Claude (Claude 3 Opus, Sonnet, Haiku, etc.)</li>
+      <li>Ollama (for local open-source models)</li>
+      <li>Google Gemini</li>
+    </ul>
+  </li>
+  <li><strong>Rich Text Interface</strong>
+    <ul>
+      <li>Syntax highlighting for code blocks</li>
+      <li>Streaming support for real-time responses</li>
+      <li>"Copy Code" button for easy reuse</li>
+    </ul>
+  </li>
+  <li><strong>Advanced Features</strong>
+    <ul>
+      <li>Preprompt system for reusable context templates</li>
+      <li>"Show thinking" option for DeepSeek</li>
+      <li>Save and load conversations (JSON and text)</li>
+      <li>Customizable API endpoints</li>
+      <li>Thread-based conversation management</li>
+      <li>AI-to-AI conversation feature</li>
+    </ul>
+  </li>
+  <li><strong>User-Friendly Design</strong>
+    <ul>
+      <li>Simple and intuitive interface</li>
+      <li>Real-time streaming responses</li>
+      <li>Easy configuration for multiple providers</li>
+    </ul>
+  </li>
+</ul>
 
-- **Multi-Provider Support**
-  - OpenAI (GPT-4, GPT-3.5, etc.)
-  - Anthropic Claude (Claude 3 Opus, Sonnet, Haiku, etc.)
-  - Ollama (for local open-source models)
-  - Google Gemini
+<hr>
 
-- **Rich Text Interface**
-  - Syntax highlighting for code blocks
-  - Streaming support for real-time responses
-  - "Copy Code" button for easy reuse
+<h2 id="data-and-security" style="font-size: 2.5em;">Data &amp; Security</h2>
+<ul style="font-size: 1.2em;">
+  <li><strong>Local Storage</strong>
+    <ul>
+      <li>Conversations are stored in an SQLite database (<code>chat_history.db</code>)</li>
+      <li>API keys are securely stored using Qt's settings mechanism</li>
+      <li>Debug logs (<code>ai_chat_debug.log</code>) may include message content for troubleshooting</li>
+    </ul>
+  </li>
+  <li><strong>Privacy</strong>
+    <ul>
+      <li>Your conversations are only sent to the AI provider APIs you configure</li>
+    </ul>
+  </li>
+  <li><strong>Security Considerations</strong>
+    <ul>
+      <li>Keep your computer secure, as API keys are stored locally</li>
+      <li>Be aware of usage costs with providers like OpenAI and Anthropic</li>
+      <li>Ollama allows local model usage without external data transfer</li>
+    </ul>
+  </li>
+</ul>
 
-- **Advanced Features**
-  - Preprompt system for reusable context templates
-  - "Show thinking" option for DeepSeek
-  - Save and load conversations (JSON and text)
-  - Customizable API endpoints
-  - Thread-based conversation management
-  - AI-to-AI conversation feature
+<hr>
 
-- **User-Friendly Design**
-  - Simple and intuitive interface
-  - Real-time streaming responses
-  - Easy configuration for multiple providers
+<h2 id="dependencies" style="font-size: 2.5em;">Dependencies</h2>
+<ul style="font-size: 1.2em;">
+  <li>Python 3.6+</li>
+  <li><a href="https://pypi.org/project/PyQt5/">PyQt5</a></li>
+  <li><a href="https://pypi.org/project/requests/">Requests</a></li>
+  <li><a href="https://pypi.org/project/qtconsole/">qtconsole</a></li>
+  <li><a href="https://pypi.org/project/fuzzywuzzy/">fuzzywuzzy</a></li>
+  <li><a href="https://pypi.org/project/google-genai/">google-genai</a></li>
+</ul>
 
----
+<hr>
 
-## Data & Security
+<h2 id="installation" style="font-size: 2.5em;">Installation</h2>
+<ol style="font-size: 1.2em;">
+  <li>
+    <strong>Clone the repository:</strong>
+    <pre>git clone https://github.com/Magnetron85/PyChat.git</pre>
+  </li>
+  <li>
+    <strong>Install dependencies:</strong>
+    <pre>pip install PyQt5 requests qtconsole fuzzywuzzy google-genai</pre>
+  </li>
+  <li>
+    <strong>Run the application:</strong>
+    <pre>python pychat.py</pre>
+  </li>
+</ol>
 
-- **Local Storage**
-  - Conversations are stored in an SQLite database (`chat_history.db`)
-  - API keys are securely stored using Qt's settings mechanism
-  - Debug logs (`ai_chat_debug.log`) may include message content for troubleshooting
+<hr>
 
-- **Privacy**
-  - Your conversations are only sent to the AI provider APIs you configure
+<h2 id="setup" style="font-size: 2.5em;">Setup</h2>
+<h3 style="font-size: 2em;">Setting up OpenAI</h3>
+<ol style="font-size: 1.2em;">
+  <li>Navigate to the <strong>Settings</strong> tab.</li>
+  <li>Select <strong>OpenAI</strong> from the provider dropdown.</li>
+  <li>Enter your OpenAI API key (get it from the <a href="https://platform.openai.com/">OpenAI Platform</a>).</li>
+  <li>Click <strong>Save Settings</strong>.</li>
+</ol>
 
-- **Security Considerations**
-  - Keep your computer secure, as API keys are stored locally
-  - Be aware of usage costs with providers like OpenAI and Anthropic
-  - Ollama allows local model usage without external data transfer
+<h3 style="font-size: 2em;">Setting up Anthropic Claude</h3>
+<ol style="font-size: 1.2em;">
+  <li>Navigate to the <strong>Settings</strong> tab.</li>
+  <li>Select <strong>Claude (Anthropic)</strong> from the provider dropdown.</li>
+  <li>Enter your Anthropic API key (from the <a href="https://console.anthropic.com/">Anthropic Console</a>).</li>
+  <li>Click <strong>Save Settings</strong>.</li>
+</ol>
 
----
+<h3 style="font-size: 2em;">Setting up Ollama</h3>
+<ol style="font-size: 1.2em;">
+  <li>Install <a href="https://ollama.ai/">Ollama</a> on your system.</li>
+  <li>Ensure Ollama is running (default URL: <code>http://localhost:11434</code>).</li>
+  <li>Use the default URL in PyChat or modify it as needed.</li>
+  <li>Click <strong>Refresh Models</strong> to load your installed Ollama models.</li>
+</ol>
 
-## Dependencies
+<h3 style="font-size: 2em;">Setting up Google Gemini</h3>
+<ol style="font-size: 1.2em;">
+  <li>Navigate to the <strong>Settings</strong> tab.</li>
+  <li>Select <strong>Gemini (Google)</strong> from the provider dropdown.</li>
+  <li>Enter your Google Gemini API key.</li>
+  <li>Click <strong>Save Settings</strong>.</li>
+</ol>
 
-- Python 3.6+
-- [PyQt5](https://pypi.org/project/PyQt5/)
-- [Requests](https://pypi.org/project/requests/)
-- [qtconsole](https://pypi.org/project/qtconsole/)
-- [fuzzywuzzy](https://pypi.org/project/fuzzywuzzy/)
-- [google-genai](https://pypi.org/project/google-genai/)
+<hr>
 
----
+<h2 id="usage" style="font-size: 2.5em;">Usage</h2>
+<h3 style="font-size: 2em;">Preprompts</h3>
+<ul style="font-size: 1.2em;">
+  <li>Click <strong>Preprompt</strong> to expand the panel.</li>
+  <li>Click <strong>New</strong> to create a preprompt.</li>
+  <li>Enter a name and content, then click <strong>Save</strong>.</li>
+  <li>Select your preprompt before sending messages.</li>
+</ul>
 
-## Installation
+<h3 style="font-size: 2em;">Sending Messages</h3>
+<ol style="font-size: 1.2em;">
+  <li>Choose your provider and model.</li>
+  <li>Type your message in the input area.</li>
+  <li>Click <strong>Send</strong> or press <code>Ctrl+Enter</code>.</li>
+  <li>Watch the AI's response appear in the chat area.</li>
+</ol>
 
-1. **Clone the repository:**
-    ```bash
-    git clone https://github.com/Magnetron85/PyChat.git
-    ```
-2. **Install dependencies:**
-    ```bash
-    pip install PyQt5 requests qtconsole fuzzywuzzy google-genai
-    ```
-3. **Run the application:**
-    ```bash
-    python pychat.py
-    ```
+<h3 style="font-size: 2em;">Conversation Management</h3>
+<ul style="font-size: 1.2em;">
+  <li><strong>File &gt; New Thread</strong> starts a new conversation.</li>
+  <li>The thread list on the left displays all active conversations.</li>
+  <li>Right-click on threads to rename, archive, or delete them.</li>
+</ul>
 
----
+<h3 style="font-size: 2em;">Saving Conversations</h3>
+<ul style="font-size: 1.2em;">
+  <li>Click <strong>Save Chat</strong> to export a text file.</li>
+  <li>Use <strong>File &gt; Export Thread</strong> to save the conversation as a JSON file.</li>
+  <li>Use <strong>File &gt; Import Thread</strong> to load a JSON conversation.</li>
+</ul>
 
-## Setup
+<h3 style="font-size: 2em;">Model Management</h3>
+<ul style="font-size: 1.2em;">
+  <li><strong>Ollama:</strong> Manage and install models via Ollama.</li>
+  <li><strong>Google Gemini, OpenAI, Anthropic:</strong> Models load automatically when valid API keys are provided.</li>
+</ul>
 
-### Setting up OpenAI
+<hr>
 
-1. Navigate to the **Settings** tab.
-2. Select **OpenAI** from the provider dropdown.
-3. Enter your OpenAI API key (get it from the [OpenAI Platform](https://platform.openai.com/)).
-4. Click **Save Settings**.
+<h2 id="troubleshooting" style="font-size: 2.5em;">Troubleshooting</h2>
+<ul style="font-size: 1.2em;">
+  <li><strong>Models not loading:</strong> Verify your API keys in the <strong>Settings</strong> tab.</li>
+  <li><strong>Ollama connection issues:</strong> Ensure Ollama is running.</li>
+  <li><strong>Error messages:</strong> Check the <code>ai_chat_debug.log</code> for details.</li>
+  <li><strong>API key issues:</strong> Confirm that your keys are correct and active.</li>
+  <li><strong>Database issues:</strong> Verify file permissions for <code>chat_history.db</code>.</li>
+</ul>
 
-### Setting up Anthropic Claude
+<hr>
 
-1. Navigate to the **Settings** tab.
-2. Select **Claude (Anthropic)** from the provider dropdown.
-3. Enter your Anthropic API key (from the [Anthropic Console](https://console.anthropic.com/)).
-4. Click **Save Settings**.
+<h2 id="data-cleanup" style="font-size: 2.5em;">Data Cleanup</h2>
+<ul style="font-size: 1.2em;">
+  <li>Delete <code>chat_history.db</code> to remove all stored conversations.</li>
+  <li>Clear API keys via the <strong>Settings</strong> tab.</li>
+  <li>Delete <code>ai_chat_debug.log</code> to remove old logs.</li>
+</ul>
 
-### Setting up Ollama
+<hr>
 
-1. Install [Ollama](https://ollama.ai/) on your system.
-2. Ensure Ollama is running (default URL: `http://localhost:11434`).
-3. Use the default URL in PyChat or modify it as needed.
-4. Click **Refresh Models** to load your installed Ollama models.
-
-### Setting up Google Gemini
-
-1. Navigate to the **Settings** tab.
-2. Select **Gemini (Google)** from the provider dropdown.
-3. Enter your Google Gemini API key.
-4. Click **Save Settings**.
-
----
-
-## Usage
-
-### Preprompts
-
-- Click **Preprompt** to expand the panel.
-- Click **New** to create a preprompt.
-- Enter a name and content, then click **Save**.
-- Select your preprompt before sending messages.
-
-### Sending Messages
-
-1. Choose your provider and model.
-2. Type your message in the input area.
-3. Click **Send** or press `Ctrl+Enter`.
-4. Watch the AI's response populate the chat area.
-
-### Conversation Management
-
-- **File > New Thread** starts a new conversation.
-- The thread list on the left shows all active conversations.
-- Right-click on threads to rename, archive, or delete them.
-
-### Saving Conversations
-
-- Click **Save Chat** to export a text file.
-- Use **File > Export Thread** to save the conversation as a JSON file.
-- Use **File > Import Thread** to load a JSON conversation.
-
-### Model Management
-
-- **Ollama:** Manage and install models via Ollama.
-- **Google Gemini, OpenAI, Anthropic:** Models load automatically when valid API keys are provided.
-
----
-
-## Troubleshooting
-
-- **Models not loading:** Verify your API keys in **Settings**.
-- **Ollama connection issues:** Ensure Ollama is running.
-- **Error messages:** Check the `ai_chat_debug.log` for details.
-- **API key problems:** Confirm that your keys are correct and active.
-- **Database issues:** Verify file permissions for `chat_history.db`.
-
----
-
-## Data Cleanup
-
-- Delete `chat_history.db` to remove all stored conversations.
-- Clear API keys via the **Settings** tab.
-- Delete `ai_chat_debug.log` to remove old logs.
-
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
+<h2 id="license" style="font-size: 2.5em;">License</h2>
+<p style="font-size: 1.2em;">This project is licensed under the <a href="LICENSE">MIT License</a>.</p>
