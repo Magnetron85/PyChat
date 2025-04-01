@@ -6,6 +6,7 @@ A versatile desktop application that lets you interact with multiple AI provider
   - OpenAI (GPT-4, GPT-3.5, etc.)
   - Anthropic Claude (Claude 3 Opus, Sonnet, Haiku, etc.)
   - Ollama (for local open-source models)
+  - Google Gemini
 - **Rich Text Interface**
   - Syntax highlighting for code blocks
   - Streaming support for real-time responses
@@ -43,6 +44,7 @@ The application requires the following Python packages:
 - Requests
 - qtconsole (for the Jupyter console integration)
 - fuzzywuzzy (for search functionality)
+- Google GenAI (for Gemini integration)
 
 ## Installation
 1. Clone the repository:
@@ -51,7 +53,7 @@ The application requires the following Python packages:
    ```
 2. Install the required dependencies: 
    ```bash
-   pip install PyQt5 requests qtconsole fuzzywuzzy
+   pip install PyQt5 requests qtconsole fuzzywuzzy google-genai
    ```
 3. Running the application: 
    ```bash
@@ -76,6 +78,13 @@ The application requires the following Python packages:
 - Make sure Ollama is running and listening on 0.0.0.0
 - In the application, use the default URL (http://localhost:11434) or modify if Ollama is running elsewhere on the network
 - Click "Refresh Models" to load your installed Ollama models
+
+### Setting up Google Gemini
+
+- Go to the "Settings" tab.
+- Select "Gemini (Google)" from the provider dropdown.
+- Enter your Google Gemini API key.
+- Click "Save Settings."
 
 ### Using Preprompts
 Preprompts let you store reusable contexts to add to your prompts in conversations (ie keep it brief):
@@ -106,7 +115,7 @@ You can set default preprompts or configure the application to always use the la
 
 ### Model Management
 - For Ollama, you need to install models before they appear in the application
-- For OpenAI and Anthropic, available models are loaded automatically when you have a valid API key
+- For Google Gemini, OpenAI and Anthropic, available models are loaded automatically when you have a valid API key
 
 ## Troubleshooting
 - **Models not loading**: Check your API keys in the Settings tab and ensure they're valid
