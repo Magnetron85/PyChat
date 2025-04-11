@@ -99,16 +99,7 @@ PyChat/
 
 ---
 
-## 🤝 Contributing
 
-PRs are welcome!  Please open an issue first to discuss major changes.  For local development:
-
-```bash
-# run lint + type‑check
-ruff check . && mypy --strict pychat.py
-```
-
----
 
 ## 📄 License
 
