@@ -5,6 +5,8 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QLi
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize
 from PyQt5.QtGui import QIcon, QFont, QColor, QTextDocument
 
+import logging 
+
 from ai2ai_conversation_worker import AI2AIConversationWorker
 
 class ThreadListWidget(QWidget):
@@ -358,11 +360,33 @@ class SearchResultsWidget(QWidget):
         self.header_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(self.header_label)
         
+        # Search input and button layout
+        search_layout = QHBoxLayout()
+        
         # Search input
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search all chats...")
         self.search_input.textChanged.connect(self.on_search_text_changed)
-        layout.addWidget(self.search_input)
+        search_layout.addWidget(self.search_input, 1)  # Give search input more space
+        
+        # Add search navigation buttons
+        self.prev_button = QPushButton("◀ Prev")
+        self.prev_button.setToolTip("Go to previous match")
+        self.prev_button.clicked.connect(self.on_prev_match)
+        self.prev_button.setEnabled(False)
+        
+        self.next_button = QPushButton("Next ▶")
+        self.next_button.setToolTip("Go to next match")
+        self.next_button.clicked.connect(self.on_next_match)
+        self.next_button.setEnabled(False)
+        
+        self.matches_label = QLabel("0 matches")
+        
+        search_layout.addWidget(self.prev_button)
+        search_layout.addWidget(self.next_button)
+        search_layout.addWidget(self.matches_label)
+        
+        layout.addLayout(search_layout)
         
         # Results list
         self.results_list = QListWidget()
@@ -393,22 +417,122 @@ class SearchResultsWidget(QWidget):
         self.search_timer.setSingleShot(True)
         self.search_timer.timeout.connect(self.perform_search)
         
-    def on_search_text_changed(self, text):
-        """Handle search text changes with debouncing"""
-        # Reset timer on each keystroke
-        self.search_timer.stop()
+        # Keep track of the last loaded thread and search term
+        self.current_thread_id = None
+        self.current_search_term = ""
+
+    # Add these new methods for handling the search navigation
+    def on_next_match(self):
+        """Go to the next search term match in the chat display"""
+        # Find the main window to access the chat display
+        main_window = self.get_main_window()
+        if main_window and hasattr(main_window, 'chat_display'):
+            main_window.chat_display.goto_next_match()
+
+    def on_prev_match(self):
+        """Go to the previous search term match in the chat display"""
+        # Find the main window to access the chat display
+        main_window = self.get_main_window()
+        if main_window and hasattr(main_window, 'chat_display'):
+            main_window.chat_display.goto_prev_match()
+
+    def get_main_window(self):
+        """Helper to find the main application window"""
+        # Start with this widget and walk up the parent hierarchy
+        current = self
+        while current is not None:
+            # Check if this parent has the chat_display attribute
+            if hasattr(current, 'chat_display'):
+                return current
+            current = current.parent()
         
-        if not text:
-            # Clear results if search is empty
-            self.results_list.clear()
+        # If we still don't have it, check top level windows
+        from PyQt5.QtWidgets import QApplication
+        for widget in QApplication.topLevelWidgets():
+            if hasattr(widget, 'chat_display'):
+                return widget
+        
+        return None
+
+    # Update the on_result_clicked method to also highlight search terms
+    def on_result_clicked(self, item):
+        data = item.data(Qt.UserRole)
+        if not data:
             return
-        
-        # Set timer for 300ms debounce
-        self.search_timer.start(300)
-    
+
+        if data.get("type") == "message":
+            thread_id = data.get("thread_id")
+            message_id = data.get("message_id")
+            if thread_id and message_id:
+                # Retrieve the main window to access chat_display
+                main_window = self.get_main_window()
+                if main_window and hasattr(main_window, 'chat_display'):
+                    chat_display = main_window.chat_display
+                    # Directly navigate to the specific message by its ID
+                    chat_display.goto_match_by_message_id(message_id)
+        elif data.get("type") == "thread_header":
+            thread_id = data.get("thread_id")
+            if thread_id:
+                self.current_thread_id = thread_id
+                self.result_selected.emit(thread_id, None)
+                QTimer.singleShot(300, self.jump_to_match)
+
+    def jump_to_match(self, target_message_id=None):
+        main_window = self.get_main_window()
+        if main_window and hasattr(main_window, 'chat_display'):
+            chat_display = main_window.chat_display
+            # Update the search term in the chat display and re-highlight
+            chat_display.current_search_term = self.search_input.text().strip()
+            chat_display.clear_search_highlights()
+            matches = chat_display.highlight_search_terms(chat_display.current_search_term)
+            if matches:
+                if target_message_id is not None:
+                    # Jump to the specific match based on target_message_id
+                    chat_display.goto_match_by_message_id(target_message_id)
+                else:
+                    chat_display.moveCursor(QTextCursor.Start)
+                    chat_display.goto_next_match()
+
+
+    def highlight_current_search_term(self):
+        """Highlight the current search term in the loaded thread"""
+        self.current_search_term = self.search_input.text().strip()
+        if not self.current_search_term:
+            logging.debug("No current search term to highlight")
+            return
+            
+        # Get the main window
+        main_window = self.get_main_window()
+        if main_window and hasattr(main_window, 'chat_display'):
+            logging.debug(f"Highlighting search term: '{self.current_search_term}'")
+            
+            # Store the current search term in the chat display
+            main_window.chat_display.current_search_term = self.current_search_term
+            
+            # Highlight all occurrences
+            matches = main_window.chat_display.highlight_search_terms(self.current_search_term)
+            logging.debug(f"Found {len(matches)} matches for term: '{self.current_search_term}'")
+            
+            # Update UI with match count
+            self.matches_label.setText(f"{len(matches)} matches")
+            
+            # Enable/disable navigation buttons
+            has_matches = len(matches) > 0
+            self.prev_button.setEnabled(has_matches)
+            self.next_button.setEnabled(has_matches)
+            
+            # Auto-scroll to the first match if there are matches
+            if has_matches:
+                main_window.chat_display.goto_next_match()
+        else:
+            logging.debug("Could not find main window or chat display")
+
+    # Update the perform_search method to store the search term
     def perform_search(self):
         """Execute search after debounce delay"""
         search_text = self.search_input.text().strip()
+        self.current_search_term = search_text  # Store the current search term
+        
         if search_text:
             logging.debug(f"SearchResultsWidget performing search for: '{search_text}'")
             results = self.db_manager.search_messages(search_text)
@@ -422,6 +546,47 @@ class SearchResultsWidget(QWidget):
                 item = QListWidgetItem("No results found")
                 item.setFlags(item.flags() & ~Qt.ItemIsSelectable)
                 self.results_list.addItem(item)
+                
+                # Clear any existing highlights and disable navigation buttons
+                main_window = self.get_main_window()
+                if main_window and hasattr(main_window, 'chat_display'):
+                    main_window.chat_display.clear_search_highlights()
+                
+                self.matches_label.setText("0 matches")
+                self.prev_button.setEnabled(False)
+                self.next_button.setEnabled(False)
+        else:
+            # Clear the search results and any highlights
+            self.results_list.clear()
+            
+            main_window = self.get_main_window()
+            if main_window and hasattr(main_window, 'chat_display'):
+                main_window.chat_display.clear_search_highlights()
+            
+            self.matches_label.setText("0 matches")
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+        
+    def on_search_text_changed(self, text):
+        # Reset timer on each keystroke
+        self.search_timer.stop()
+        
+        if not text:
+            # If search input is cleared, clear results and search highlights.
+            self.results_list.clear()
+            self.current_search_term = ""
+            self.matches_label.setText("0 matches")
+            self.prev_button.setEnabled(False)
+            self.next_button.setEnabled(False)
+            # Clear the highlights in the chat display if available.
+            main_window = self.get_main_window()
+            if main_window and hasattr(main_window, 'chat_display'):
+                main_window.chat_display.clear_search_highlights()
+            return
+        
+        # Set timer for 300ms debounce if search text is not empty.
+        self.search_timer.start(300)
+
     
     def display_results(self, results):
         """Display search results"""
@@ -435,6 +600,8 @@ class SearchResultsWidget(QWidget):
         
         # Update header
         self.header_label.setText(f"Search Results ({len(results)})")
+        
+        match_index = 0  # Local counter for match indices across all messages
         
         # Group results by thread
         thread_results = {}
@@ -457,6 +624,8 @@ class SearchResultsWidget(QWidget):
             font.setBold(False)
             thread_header.setFont(font)
             self.results_list.addItem(thread_header)
+            
+            
             
             # Add message results
             for message in thread_data["messages"]:
@@ -521,7 +690,16 @@ class SearchResultsWidget(QWidget):
                     "thread_id": thread_id,
                     "message_id": message.get("id")
                 })
-                item.setIndent(10)  # Indent to show hierarchy
+                display_text = "    " + display_text  # Add spaces for visual indentation
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.UserRole, {
+                    "type": "message",
+                    "thread_id": thread_id,
+                    "message_id": message.get("id"),
+                    "match_index": match_index  # assign the local counter
+                })
+                
+                match_index += 1  # Increment after each message
                 
                 self.results_list.addItem(item)
             
@@ -550,11 +728,25 @@ class SearchResultsWidget(QWidget):
             thread_id = data.get("thread_id")
             message_id = data.get("message_id")
             if thread_id and message_id:
+                self.current_thread_id = thread_id
+                # Emit signal to load the thread
                 self.result_selected.emit(thread_id, message_id)
+                
+                # After a longer delay to let the thread load completely
+                match_index = data.get("match_index")
+                QTimer.singleShot(100, self.highlight_current_search_term)
+                
         elif data.get("type") == "thread_header":
             thread_id = data.get("thread_id")
             if thread_id:
+                self.current_thread_id = thread_id
+                # Emit signal to load the thread
                 self.result_selected.emit(thread_id, None)
+                
+                # After a longer delay to let the thread load completely
+                QTimer.singleShot(500, self.highlight_current_search_term)
+                
+    
 
 
 class AIToChatPanel(QWidget):

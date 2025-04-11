@@ -15,7 +15,7 @@ class OpenAIRequestWorker(QThread):
         self.prompt = prompt
         self.api_key = api_key
         self.stream = stream
-        self.use_conversation = use_conversation  # NEW: Flag to determine if we're using conversation history
+        self.use_conversation = use_conversation  # NEW parameter
     
     def run(self):
         try:
@@ -33,16 +33,19 @@ class OpenAIRequestWorker(QThread):
                     "messages": self.prompt,
                     "stream": self.stream
                 }
-            else:
-                # Standard prompt format - either a string or a single message
-                if isinstance(self.prompt, str):
-                    messages = [{"role": "user", "content": self.prompt}]
-                else:
-                    messages = [self.prompt]  # Just in case it's already a message object
-                
+            # Build request data for OpenAI
+            if self.use_conversation and isinstance(self.prompt, list):
+                # Using conversation history - prompt is already a list of messages
                 data = {
                     "model": self.model,
-                    "messages": messages,
+                    "messages": self.prompt,
+                    "stream": self.stream
+                }
+            else:
+                # Standard prompt format
+                data = {
+                    "model": self.model,
+                    "messages": [{"role": "user", "content": self.prompt}],
                     "stream": self.stream
                 }
             

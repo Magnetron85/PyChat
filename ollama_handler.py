@@ -24,9 +24,10 @@ class OllamaRequestWorker(QThread):
         self.model = model
         self.prompt = prompt
         self.stream = stream
-        self.use_conversation = use_conversation  # This is mainly for interface consistency
+        self.use_conversation = use_conversation  # NEW parameter (for interface consistency)  # This is mainly for interface consistency
                                                  # Ollama doesn't have a native conversation API,
                                                  # so we handle it in the main app by constructing the prompt
+                                                
     
     def run(self):
         try:

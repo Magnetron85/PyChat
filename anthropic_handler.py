@@ -16,7 +16,7 @@ class AnthropicRequestWorker(QThread):
         self.api_key = api_key
         self.stream = stream
         self.max_tokens = max_tokens
-        self.use_conversation = use_conversation  # NEW: Flag to determine if we're using conversation history
+        self.use_conversation = use_conversation  # NEW parameter
     
     def run(self):
         try:
@@ -28,6 +28,7 @@ class AnthropicRequestWorker(QThread):
             }
             
             # NEW: Handle different formats based on conversation mode
+            # Build request data for Anthropic
             if self.use_conversation and isinstance(self.prompt, list):
                 # Using conversation history - prompt is already a list of messages
                 data = {
@@ -37,16 +38,11 @@ class AnthropicRequestWorker(QThread):
                     "stream": self.stream
                 }
             else:
-                # Standard prompt format - either a string or a single message
-                if isinstance(self.prompt, str):
-                    messages = [{"role": "user", "content": self.prompt}]
-                else:
-                    messages = [self.prompt]  # Just in case it's already a message object
-                
+                # Standard prompt format
                 data = {
                     "model": self.model,
                     "max_tokens": self.max_tokens,
-                    "messages": messages,
+                    "messages": [{"role": "user", "content": self.prompt}],
                     "stream": self.stream
                 }
             
@@ -155,7 +151,7 @@ class AnthropicRequestWorker(QThread):
 
 
 class AnthropicModelsWorker(QThread):
-    """Worker thread to load available Anthropic models"""
+    """Worker thread to load available Anthropic models dynamically from the API"""
     finished = pyqtSignal(list, bool)
     
     def __init__(self, api_key=None):
@@ -163,18 +159,53 @@ class AnthropicModelsWorker(QThread):
         self.api_key = api_key
         
     def run(self):
-        # For Anthropic, we use a predefined list of models since there's no public API to list models
-        # This can be updated as new models are released
-        models = [
-            #"claude-3-opus-20240229",
-            #"claude-3-sonnet-20240229", 
-            "claude-3-haiku-20240307",
-            "claude-3-5-sonnet-20240620",  # Add new models as they become available
-            "claude-3-7-sonnet-20250219"
-        ]
-        
-        # We could technically verify the API key here by making a small request,
-        # but that would use unnecessary tokens
-        
-        # Just return the hardcoded list of models
-        self.finished.emit(models, True)
+        if not self.api_key:
+            # If no API key is provided, return an empty list
+            self.finished.emit([], False)
+            return
+            
+        try:
+            # API endpoint for listing models
+            models_url = "https://api.anthropic.com/v1/models"
+            
+            # Headers for the request
+            headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01"  # Use the same version as in your other requests
+            }
+            
+            # Make request to list models
+            response = requests.get(
+                models_url,
+                headers=headers,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                models_data = response.json()
+                
+                # Extract model IDs from the response
+                if "data" in models_data and isinstance(models_data["data"], list):
+                    # Extract just the model IDs
+                    models = [model["id"] for model in models_data["data"] if "id" in model]
+                    self.finished.emit(models, True)
+                else:
+                    logging.error("Unexpected response format from Anthropic Models API")
+                    self.finished.emit([], False)
+            else:
+                error_msg = f"Error: Anthropic returned status code {response.status_code}"
+                try:
+                    error_json = response.json()
+                    if "error" in error_json:
+                        error_msg += f" - {error_json['error']['message']}"
+                except:
+                    pass
+                logging.error(error_msg)
+                self.finished.emit([], False)
+                
+        except requests.RequestException as e:
+            logging.error(f"Network error when fetching Anthropic models: {str(e)}")
+            self.finished.emit([], False)
+        except Exception as e:
+            logging.error(f"Error fetching Anthropic models: {str(e)}")
+            self.finished.emit([], False)

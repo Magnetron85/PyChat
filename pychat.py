@@ -27,6 +27,8 @@ from enhanced_chat_browser import EnhancedChatBrowser
 from chat_db_manager import ChatDatabaseManager
 from thread_ui_components import ThreadListWidget, SearchResultsWidget, AIToChatPanel, ThreadCreationDialog
 from ai2ai_conversation_worker import AI2AIConversationWorker
+from simple_rag_manager import SimpleRAGManager
+from simple_rag_ui import RAGPanel
 import sqlite3
 
 # Setup logging
@@ -436,7 +438,7 @@ class MultiProviderChat(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Multi-Provider AI Chat")
-        self.setMinimumSize(900, 700)
+        self.setMinimumSize(1000, 800)
         
         # Initialize variables
         self.is_processing = False
@@ -502,6 +504,11 @@ class MultiProviderChat(QMainWindow):
         # Load memory enabled setting
         self.memory_enabled = self.settings.value("memory_enabled", True, type=bool)
         
+        # Load RAG settings
+        self.rag_enabled = self.settings.value("rag_enabled", False, type=bool)
+        self.rag_visibility = self.settings.value("rag_visibility", True, type=bool)
+        self.rag_kb_id = self.settings.value("rag_kb_id", None)
+    
         # NEW: Load last thread ID
         self.last_thread_id = self.settings.value("last_thread_id", None)
     
@@ -549,18 +556,24 @@ class MultiProviderChat(QMainWindow):
         # Create tab widget for different sections
         self.tabs = QTabWidget()
         
-        # Create chat tab
+        # Create all tab widgets first
         chat_tab = QWidget()
+        search_tab = QWidget()
+        settings_tab = QWidget()
+        ai_to_ai_tab = QWidget()
+        rag_tab = QWidget()
+        
+        # ==== CHAT TAB ====
         chat_layout = QVBoxLayout()
         
-        # NEW: Create a horizontal splitter for thread list and chat area
+        # Create a horizontal splitter for thread list and chat area
         thread_chat_splitter = QSplitter(Qt.Horizontal)
         
-        # NEW: Thread list panel
+        # Thread list panel
         thread_list_panel = QWidget()
         thread_list_layout = QVBoxLayout()
         
-        # NEW: Create thread list widget
+        # Create thread list widget
         self.thread_list_widget = ThreadListWidget(self.db_manager)
         self.thread_list_widget.thread_selected.connect(self.load_thread)
         thread_list_layout.addWidget(self.thread_list_widget)
@@ -576,7 +589,7 @@ class MultiProviderChat(QMainWindow):
         chat_area = QWidget()
         chat_area_layout = QVBoxLayout()
         
-        # ===== Provider selection section =====
+        # Provider selection section
         provider_group = QGroupBox("AI Provider")
         provider_layout = QHBoxLayout()
         
@@ -620,13 +633,13 @@ class MultiProviderChat(QMainWindow):
         provider_group.setLayout(provider_layout)
         chat_area_layout.addWidget(provider_group)
         
-        # ===== Options section =====
+        # Options section
         options_group = QGroupBox("Options")
         options_layout = QHBoxLayout()
 
         # Streaming checkbox
         self.stream_checkbox = QCheckBox("Enable streaming")
-        self.stream_checkbox.setChecked(True)
+        self.stream_checkbox.setChecked(False)
         self.stream_checkbox.setToolTip("Show responses in real-time as they are generated")
 
         # Show thinking checkbox
@@ -645,6 +658,53 @@ class MultiProviderChat(QMainWindow):
         options_layout.addWidget(self.memory_checkbox)
         options_layout.addStretch(1)
         
+        # RAG section
+        rag_options_layout = QHBoxLayout()
+        self.rag_checkbox = QCheckBox("Use RAG")
+        self.rag_checkbox.setChecked(False)
+        self.rag_checkbox.setToolTip("Use Retrieval Augmented Generation with your knowledge base")
+        # Temporarily disconnect the state changed signal
+        self.rag_checkbox.blockSignals(True)
+
+        # Add dropdown for knowledge base selection
+        rag_kb_label = QLabel("Knowledge Base:")
+        self.rag_kb_dropdown = QComboBox()
+        self.rag_kb_dropdown.setToolTip("Select which knowledge base to use")
+        self.rag_kb_dropdown.setEnabled(False)  # Disabled until RAG is enabled
+
+        # Add checkbox for RAG visibility
+        self.rag_visibility_checkbox = QCheckBox("Show RAG Context")
+        self.rag_visibility_checkbox.setChecked(True)
+        self.rag_visibility_checkbox.setToolTip("Show the RAG context in the prompt")
+        self.rag_visibility_checkbox.setEnabled(False)  # Disabled until RAG is enabled
+
+        # Apply saved RAG settings
+        if hasattr(self, 'rag_enabled'):
+            self.rag_checkbox.setChecked(self.rag_enabled)
+            # Don't call the toggled handler yet
+            
+        if hasattr(self, 'rag_visibility'):
+            self.rag_visibility_checkbox.setChecked(self.rag_visibility)
+
+        rag_options_layout.addWidget(self.rag_checkbox)
+        rag_options_layout.addWidget(rag_kb_label)
+        rag_options_layout.addWidget(self.rag_kb_dropdown)
+        rag_options_layout.addWidget(self.rag_visibility_checkbox)
+        options_layout.addLayout(rag_options_layout)
+        options_group.setLayout(options_layout)
+        chat_area_layout.addWidget(options_group)
+
+        # Now we can connect the signal and enable controls properly
+        self.rag_checkbox.blockSignals(False)
+        self.rag_checkbox.stateChanged.connect(self.on_rag_toggled)
+
+        # Enable the controls manually if RAG is enabled
+        if hasattr(self, 'rag_enabled') and self.rag_enabled:
+            self.rag_kb_dropdown.setEnabled(True)
+            self.rag_visibility_checkbox.setEnabled(True)
+
+        options_layout.addLayout(rag_options_layout)
+
         options_group.setLayout(options_layout)
         chat_area_layout.addWidget(options_group)
         
@@ -652,7 +712,7 @@ class MultiProviderChat(QMainWindow):
         self.preprompt_ui = CollapsiblePrepromptUI(self, self.preprompt_manager)
         chat_area_layout.addWidget(self.preprompt_ui.get_preprompt_widget())
         
-        # ===== Chat section =====
+        # Chat section
         # Create a splitter to allow resizing between chat history and input
         splitter = QSplitter(Qt.Vertical)
         
@@ -670,11 +730,11 @@ class MultiProviderChat(QMainWindow):
         splitter.addWidget(self.prompt_input)
         
         # Set initial sizes for the splitter
-        splitter.setSizes([500, 100])
+        splitter.setSizes([600, 100])
         
         chat_area_layout.addWidget(splitter, 1)  # Give the chat area most of the space
         
-        # ===== Button section =====
+        # Button section
         button_layout = QHBoxLayout()
         
         # Action buttons
@@ -705,8 +765,14 @@ class MultiProviderChat(QMainWindow):
         chat_layout.addWidget(thread_chat_splitter)
         chat_tab.setLayout(chat_layout)
         
-        # ===== Settings Tab =====
-        settings_tab = QWidget()
+        # ==== SEARCH TAB ====
+        search_layout = QVBoxLayout()
+        self.search_widget = SearchResultsWidget(self.db_manager)
+        self.search_widget.result_selected.connect(self.handle_search_result)
+        search_layout.addWidget(self.search_widget)
+        search_tab.setLayout(search_layout)
+        
+        # ==== SETTINGS TAB ====
         settings_layout = QVBoxLayout()
         
         # Provider settings (stacked widget)
@@ -778,31 +844,43 @@ class MultiProviderChat(QMainWindow):
         
         settings_tab.setLayout(settings_layout)
         
-        # NEW: Add Search Tab
-        search_tab = QWidget()
-        search_layout = QVBoxLayout()
-        
-        self.search_widget = SearchResultsWidget(self.db_manager)
-        self.search_widget.result_selected.connect(self.handle_search_result)
-        
-        search_layout.addWidget(self.search_widget)
-        search_tab.setLayout(search_layout)
-        
-        # NEW: Add AI-to-AI Tab
-        ai_to_ai_tab = QWidget()
+        # ==== AI-TO-AI TAB ====
         ai_to_ai_layout = QVBoxLayout()
-        
         self.ai_to_ai_panel = AIToChatPanel(self.db_manager, PROVIDERS)
-        
         ai_to_ai_layout.addWidget(self.ai_to_ai_panel)
         ai_to_ai_tab.setLayout(ai_to_ai_layout)
         
-        # Add tabs to main tab widget
+        # ==== RAG TAB ====
+        rag_layout = QVBoxLayout()
+        # Create RAG panel
+        self.rag_panel = RAGPanel()
+        self.rag_panel.context_retrieved.connect(self.on_rag_context_retrieved)
+
+        # Show a loading indicator during initial load
+        if self.rag_enabled:
+            self.rag_kb_dropdown.setEnabled(False)
+            self.rag_kb_dropdown.addItem("Loading...", None)
+            
+            # Load knowledge bases asynchronously
+            from PyQt5.QtCore import QTimer
+            QTimer.singleShot(500, self.load_rag_knowledge_bases)
+        # Connect the context signal to a handler
+        self.rag_panel.context_retrieved.connect(self.on_rag_context_retrieved)
+        rag_layout.addWidget(self.rag_panel)
+        rag_tab.setLayout(rag_layout)
+        
+        # Now add all the tabs in the correct order
         self.tabs.addTab(chat_tab, "Chat")
-        # self.tabs.addTab(search_tab, "Search")
+        self.tabs.addTab(search_tab, "Search")
         self.tabs.addTab(settings_tab, "Settings")
         self.tabs.addTab(ai_to_ai_tab, "AI-to-AI")
+        self.tabs.addTab(rag_tab, "Knowledge Base")
         
+        # Connect tab changed signal to update knowledge base dropdown when switching to the Knowledge Base tab
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+        
+        # Add tabs to the main layout
         main_layout.addWidget(self.tabs)
         
         # Set the main layout to the widget
@@ -816,6 +894,132 @@ class MultiProviderChat(QMainWindow):
         # Initialize provider and load models
         self.on_provider_changed()
         
+        # Initialize RAG panel and knowledge bases if needed
+        #self.rag_panel = RAGPanel()
+        #self.rag_panel.context_retrieved.connect(self.on_rag_context_retrieved)
+        #self.load_rag_knowledge_bases()
+    
+    def on_tab_changed(self, index):
+        tab_text = self.tabs.tabText(index)
+        if tab_text in ["Chat"]:
+            self.load_rag_knowledge_bases()
+
+    def on_rag_toggled(self, state):
+        """Handle RAG checkbox toggle"""
+        is_enabled = state == Qt.Checked
+        
+        # Enable/disable related controls
+        self.rag_kb_dropdown.setEnabled(is_enabled)
+        self.rag_visibility_checkbox.setEnabled(is_enabled)
+        
+        if is_enabled and not hasattr(self, 'rag_panel'):
+            # If RAG panel doesn't exist yet, create it
+            # This happens if user toggles RAG before visiting the RAG tab
+            self.rag_panel = RAGPanel()
+            self.rag_panel.context_retrieved.connect(self.on_rag_context_retrieved)
+            
+            # Load knowledge bases into dropdown
+            self.load_rag_knowledge_bases()
+        
+        if is_enabled:
+            # Get currently selected knowledge base name
+            kb_name = self.rag_kb_dropdown.currentText()
+            self.append_to_chat(f"[SYSTEM] RAG enabled - using knowledge base: {kb_name}")
+            
+            # Check if the selected knowledge base has documents
+            if hasattr(self, 'rag_panel'):
+                if not self.check_rag_documents():
+                    self.append_to_chat(f"[SYSTEM] Warning: No documents found in '{kb_name}' knowledge base.")
+        else:
+            self.append_to_chat("[SYSTEM] RAG disabled - using standard queries")
+            
+    def on_rag_context_retrieved(self, original_query, query_with_context):
+        """Handle context-enhanced query"""
+        # This method is called when RAG context is retrieved
+        # We don't need to do anything here as the query_with_context is used directly in send_prompt
+        pass
+        
+    def load_rag_knowledge_bases(self):
+        """Load knowledge bases into the RAG dropdown asynchronously"""
+        if not hasattr(self, 'rag_panel'):
+            return
+        
+        # Remember current selection if any
+        current_kb = None
+        if self.rag_kb_dropdown.count() > 0:
+            current_kb = self.rag_kb_dropdown.currentData()
+        
+        self.rag_kb_dropdown.clear()
+        self.rag_kb_dropdown.addItem("Loading...", None)
+        self.rag_kb_dropdown.setEnabled(False)
+        
+        # Use a QTimer to load knowledge bases in the background
+        def load_kbs():
+            knowledge_bases = self.rag_panel.rag_manager.get_knowledge_bases()
+            
+            # Clear the loading item
+            self.rag_kb_dropdown.clear()
+            
+            for kb in knowledge_bases:
+                self.rag_kb_dropdown.addItem(kb["name"], kb["id"])
+            
+            # Restore selection if possible
+            if current_kb:
+                for i in range(self.rag_kb_dropdown.count()):
+                    if self.rag_kb_dropdown.itemData(i) == current_kb:
+                        self.rag_kb_dropdown.setCurrentIndex(i)
+                        break
+            elif self.rag_kb_id:  # Use saved knowledge base ID
+                for i in range(self.rag_kb_dropdown.count()):
+                    if self.rag_kb_dropdown.itemData(i) == self.rag_kb_id:
+                        self.rag_kb_dropdown.setCurrentIndex(i)
+                        break
+            
+            # Enable the dropdown
+            self.rag_kb_dropdown.setEnabled(True)
+            
+            # Connect change signal (only do this once)
+            if not self.rag_kb_dropdown.receivers(self.rag_kb_dropdown.currentIndexChanged):
+                self.rag_kb_dropdown.currentIndexChanged.connect(self.on_rag_kb_changed)
+        
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(100, load_kbs)
+            
+    def on_rag_kb_changed(self, index):
+        """Handle RAG knowledge base selection change"""
+        if index >= 0 and hasattr(self, 'rag_panel'):
+            kb_id = self.rag_kb_dropdown.itemData(index)
+            kb_name = self.rag_kb_dropdown.currentText()
+            
+            if not kb_id:  # Skip the "Loading..." item
+                return
+                
+            # Show loading indicator
+            self.append_to_chat(f"[SYSTEM] Loading knowledge base: {kb_name}...")
+            
+            # Update the selected knowledge base in the RAG panel asynchronously
+            def on_kb_loaded(success, message):
+                if success:
+                    # Update in the UI if the RAG tab exists
+                    if hasattr(self.rag_panel, 'kb_dropdown'):
+                        for i in range(self.rag_panel.kb_dropdown.count()):
+                            if self.rag_panel.kb_dropdown.itemData(i) == kb_id:
+                                self.rag_panel.kb_dropdown.setCurrentIndex(i)
+                                break
+                    
+                    # Show a message about the change
+                    if self.rag_checkbox.isChecked():
+                        self.append_to_chat(f"[SYSTEM] Switched to knowledge base: {kb_name}")
+                        
+                        # Check if the selected knowledge base has documents
+                        if not self.check_rag_documents():
+                            self.append_to_chat(f"[SYSTEM] Warning: No documents found in '{kb_name}' knowledge base.")
+                else:
+                    self.append_to_chat(f"[SYSTEM] Error loading knowledge base: {message}")
+            
+            # Use asynchronous knowledge base loading
+            self.rag_panel.rag_manager.set_knowledge_base_async(kb_id, on_kb_loaded)
+    
     def create_menu_bar(self):
         """Create application menu bar"""
         menubar = self.menuBar()
@@ -943,7 +1147,8 @@ class MultiProviderChat(QMainWindow):
                 self.format_message_with_code_blocks(content, False)
                 msg_provider = message.get("provider", self.selected_provider)
                 msg_model = message.get("model", self.selected_model)
-                self.append_to_chat(f"[SYSTEM] Response from: {msg_provider.capitalize()} - {msg_model}")
+                msg_id = message.get("id", "N/A") 
+                self.append_to_chat(f"[SYSTEM] Response from: {msg_provider.capitalize()} - {msg_model}. [!--msgID: {msg_id}]")
             elif role == "system":
                 self.append_to_chat(f"[SYSTEM] {content}")
             else:
@@ -993,16 +1198,57 @@ class MultiProviderChat(QMainWindow):
 
     def handle_search_result(self, thread_id, message_id=None):
         """Handle a search result selection by loading the thread and scrolling to the message"""
+        logging.debug(f"Handling search result for thread {thread_id}, message {message_id}")
+        
         self.tabs.setCurrentIndex(0)  # Switch to chat tab
         self.load_thread(thread_id)
         
+        # If a specific message ID was provided, scroll to it
         if message_id:
-            # Scroll to the specific message (not implemented yet)
-            # This would require adding message IDs to the chat display or other mechanism
-            pass
-
+            # We need to find the position of this message in the displayed text
+            messages = self.db_manager.get_messages(thread_id)
+            target_message = None
+            
+            # Find the target message
+            for msg in messages:
+                if msg["id"] == message_id:
+                    target_message = msg
+                    break
+                    
+            if target_message:
+                logging.debug(f"Found target message: {message_id}")
+                
+    def check_rag_documents(self):
+        """Check if there are documents in the RAG knowledge base"""
+        if hasattr(self, 'rag_panel'):
+            # Do this asynchronously to prevent UI freezing
+            def check_docs():
+                docs = self.rag_panel.rag_manager.get_all_documents()
+                if not docs and self.rag_checkbox.isChecked():
+                    self.append_to_chat("[SYSTEM] RAG is enabled but no documents found in your knowledge base. "
+                                  "Add documents in the Knowledge Base tab.")
+                    return False
+                return True
+            
+            from PyQt5.QtCore import QTimer
+            result = [True]  # Use a list to store the result (mutable)
+            
+            def perform_check():
+                result[0] = check_docs()
+            
+            # Run synchronously for now, but could be made async if needed
+            perform_check()
+            return result[0]
+        return True
+    
     def send_prompt(self):
         """Send a prompt to the AI provider and handle the response"""
+        if self.rag_checkbox.isChecked():
+            if not self.check_rag_documents():
+                # If no documents and RAG is enabled, the warning is already shown
+                # Still continue with the prompt, but without RAG enhancement
+                pass
+        
         if self.is_processing:
             self.append_to_chat("[SYSTEM] Already processing a request. Please wait.")
             return
@@ -1025,7 +1271,25 @@ class MultiProviderChat(QMainWindow):
                 return
         else:
             prompt = base_prompt
-        
+            
+        # Store the original prompt for display to the user
+        display_prompt = prompt
+
+        # RAG enhancement
+        if hasattr(self, 'rag_checkbox') and self.rag_checkbox.isChecked() and hasattr(self, 'rag_panel'):
+            # Get enhanced prompt with context
+            show_rag_context = hasattr(self, 'rag_visibility_checkbox') and self.rag_visibility_checkbox.isChecked()
+            original_prompt = prompt
+            # The prompt sent to the model will always include RAG context
+            prompt = self.rag_panel.get_context_for_query(prompt, show_rag_context)
+            logging.debug(f"Using RAG-enhanced prompt (original length: {len(original_prompt)}, enhanced length: {len(prompt)})")
+            
+            # If show_rag_context is False, use the original prompt for display
+            if not show_rag_context:
+                display_prompt = original_prompt
+            else: 
+                display_prompt=prompt
+
         if not prompt:
             self.append_to_chat("[SYSTEM] Please enter a prompt.")
             return
@@ -1065,15 +1329,15 @@ class MultiProviderChat(QMainWindow):
             success = self.db_manager.add_message(
                 self.current_thread_id,
                 "user",  # Explicitly set the role to "user"
-                prompt,  # Store the prompt 
+                display_prompt,  # Store the display prompt that user sees - NOT the full RAG context if hidden
                 provider=self.selected_provider,
                 model=self.selected_model
             )
             if not success:
                 logging.error("Failed to save user message to database")
         
-        # Show user message in chat display
-        self.append_to_chat(f"> {prompt}")
+        # Show user message in chat display - use display_prompt rather than full prompt with hidden RAG context
+        self.append_to_chat(f"> {display_prompt}")
         
         # Clear prompt input
         self.prompt_input.clear()
@@ -1091,10 +1355,10 @@ class MultiProviderChat(QMainWindow):
             self.current_streaming_id = self.chat_display.begin_streaming_response()
         
         # Add current message to conversation history
-        user_message = {"role": "user", "content": prompt}
+        user_message = {"role": "user", "content": prompt}  # Use the enhanced prompt with RAG for the model
         
         # Handle conversation history based on memory toggle
-        final_prompt = prompt
+        final_prompt = prompt  # Use the enhanced prompt with RAG for the model
         if self.memory_enabled and hasattr(self, 'conversation_history') and self.conversation_history:
             # Different handling based on provider
             if self.selected_provider in ["openai", "anthropic", "gemini"]:
@@ -1223,42 +1487,14 @@ class MultiProviderChat(QMainWindow):
     
     def format_message_with_code_blocks(self, content, is_user_message=False):
         """Helper to format messages with proper code block handling"""
-        cursor = self.chat_display.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        
-        # If this is a user message, format it differently
         if is_user_message:
-            format = QTextCharFormat()
-            format.setFontWeight(QFont.Normal)
-            cursor.insertText(f"> {content}\n", format)
+            # User messages just get prefixed with ">"
+            self.chat_display.append(f"> {content}")
             return
         
-        # For assistant messages, handle code blocks
-        if "```" in content:
-            # Split by code blocks
-            pattern = r'(```(?:\w*)\n[\s\S]*?\n```)'
-            parts = re.split(pattern, content)
-            
-            for part in parts:
-                if part.strip() and part.startswith("```") and part.endswith("```"):
-                    # This is a code block - format it properly
-                    self.chat_display._insert_code_block(cursor, part)
-                elif part.strip():
-                    # Normal text part
-                    format = QTextCharFormat()
-                    format.setForeground(QColor("#24292e"))
-                    cursor.insertText(part, format)
-            
-            # Add final newline
-            cursor.insertBlock()
-        else:
-            # No code blocks, just insert normal text
-            format = QTextCharFormat()
-            format.setForeground(QColor("#24292e"))
-            cursor.insertText(content + "\n", format)
-        
-        self.chat_display.setTextCursor(cursor)
-        self.chat_display.ensureCursorVisible()
+        # For assistant messages, use the append method which now handles
+        # both Markdown and the message background
+        self.chat_display.append(content)
     
     def on_provider_changed(self):
         """Handle provider selection change"""
@@ -1740,8 +1976,8 @@ class MultiProviderChat(QMainWindow):
         """Handle model selection change"""
         self.selected_model = model_name
         self.update_thinking_checkbox_visibility()
-        
-        
+       
+            
     def update_ui_state(self, enabled=True):
         """Update UI elements based on processing state"""
         self.send_btn.setEnabled(enabled)
@@ -2057,6 +2293,14 @@ class MultiProviderChat(QMainWindow):
         # Save settings before closing
         self.preprompt_manager.save_preprompts()
         self.save_settings()
+        
+        # NEW: Save RAG settings
+        if hasattr(self, 'rag_checkbox'):
+            self.settings.setValue("rag_enabled", self.rag_checkbox.isChecked())
+        if hasattr(self, 'rag_visibility_checkbox'):
+            self.settings.setValue("rag_visibility", self.rag_visibility_checkbox.isChecked())
+        if hasattr(self, 'rag_kb_dropdown') and self.rag_kb_dropdown.currentData():
+            self.settings.setValue("rag_kb_id", self.rag_kb_dropdown.currentData())
         
         # If we have a current thread, save its ID in settings
         if self.current_thread_id:
