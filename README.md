@@ -69,11 +69,7 @@ The main window shows **Threads** (left), **Chat** (center), and **Search** (rig
 
 ## 📚 Using the RAG Workflow
 
-1. **Ingest documents** (PDF, TXT, MD):
-
-   ```bash
-   python simple_rag_manager.py add ./docs/my‑file.pdf
-   ```
+1. **Ingest documents to Knowledge Database** (PDF, TXT, DOCX):
 
    This chunks the document, embeds the chunks, and stores them in `rag_vectors.db`.
 
