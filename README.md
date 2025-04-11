@@ -11,10 +11,7 @@ The `rag2` branch layers in a lightweight Retrieval‑Augmented Generation (RAG)
 
 ## ✨ Key Features
 
-| Area                    | Highlights                       |
-| ----------------------- | -------------------------------- |
-| **Multi‑Provider Chat** | \* OpenAI GPT‑4o, GPT‑4, GPT‑3.5 |
-
+- OpenAI ChatGPT
 - Anthropic Claude 3 (Opus/Sonnet/Haiku)
 - Google Gemini
 - Ollama local models (Llama‑3, DeepSeek, etc.) | | **RAG Toolkit** | \* `simple_rag_manager.py` – TF‑IDF or Sentence‑BERT embeddings (switchable)
@@ -41,32 +38,9 @@ $ cd PyChat && git checkout rag2
 $ python -m venv .venv && source .venv/Scripts/activate  # Windows PowerShell
 
 # 3 – Install dependencies
-$ pip install -r requirements.txt
+$ pip install PyQt5 requests qtconsole fuzzywuzzy google-genai scikit-learn sentence-transformers numpy pandas requests PyMuPDF tqdm python-dotenv google-generativeai rich ruff mypy
 
 ---
-
-### Or install all dependencies explicitly (same versions as in `requirements.txt`)
-
-```bash
-pip install \
-  PyQt5==5.15.10 \
-  scikit-learn==1.4.2 \
-  sentence-transformers==2.7.0 \
-  numpy==1.26.4 \
-  pandas==2.2.1 \
-  requests==2.31.0 \
-  PyMuPDF==1.24.0 \
-  tqdm==4.66.2 \
-  python-dotenv==1.0.1 \
-  openai==1.17.0 \
-  anthropic==0.25.0 \
-  google-generativeai==0.3.2 \
-  rich==13.7.0 \
-  ruff==0.3.4 \
-  mypy==1.9.0 \
-  pymupdf
-````
-
 
 ## 🔑 Provider Setup
 
