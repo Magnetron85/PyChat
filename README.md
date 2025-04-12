@@ -1,6 +1,6 @@
 # PyChat
 
-A versatile desktop application that lets you interact with multiple AI providers (OpenAI, Anthropic Claude, Google Gemini, and Ollama) through a unified interface. This PyQt5-based tool offers a seamless experience for using various large language models across different providers.
+A versatile desktop application that lets you interact with multiple AI providers (OpenAI, Anthropic Claude, Google Gemini, and Ollama) through a unified interface. This PyQt5-based tool offers a seamless experience for using various large language models across different providers. Query your own documents with RAG for custom knowledge.
 
 ![PyChat Interface](https://github.com/Magnetron85/PyChat/raw/rag2/screenshot.png)
 
