@@ -280,83 +280,62 @@ class RequestWorker(QThread):
     
     def _process_chunk(self, chunk_text, full_response):
         """Process a chunk of text, handling special cases and buffering"""
-        # Process any thinking sections
+        # Process any thinking sections (unchanged)
         if self.provider_config.get("thinking_format"):
-            # Check if this is a Deepseek model
             is_deepseek = "deepseek" in self.model.lower()
-            
             if is_deepseek:
-                # Deepseek uses <thinking> tags
                 if "<thinking>" in chunk_text:
                     self.in_think_section = True
-                
-                # Skip this chunk if we're in a thinking section
                 if self.in_think_section:
                     if "</thinking>" in chunk_text:
                         self.in_think_section = False
                     return
-            elif "<think>" in chunk_text:  # Ollama standard thinking format
+            elif "<think>" in chunk_text:
                 self.in_think_section = True
-            
-            # Skip this chunk if we're in a thinking section
             if self.in_think_section:
                 if "</think>" in chunk_text:
                     self.in_think_section = False
                 return
-        
-        # Special handling for code blocks
+
+        # Code block handling (unchanged)
         if self.in_code_block:
-            # We're inside a code block, keep accumulating
             self.code_block_buffer += chunk_text
-            
-            # Check if the code block is complete
             if "```" in chunk_text:
-                # Code block is complete, emit it as one chunk
                 self.in_code_block = False
                 full_response += self.code_block_buffer
-                
-                # First send any accumulated text
                 if self.accumulated_text:
                     self.chunk_received.emit(self.accumulated_text)
                     self.accumulated_text = ""
-                
-                # Then send the code block
                 self.chunk_received.emit(self.code_block_buffer)
                 self.code_block_buffer = ""
             return
-        
-        # Check if this chunk starts a code block
+
         if "```" in chunk_text and not chunk_text.count("```") % 2 == 0:
-            # This starts a code block, begin accumulating
             self.in_code_block = True
-            
-            # First send any accumulated text
             if self.accumulated_text:
                 full_response += self.accumulated_text
                 self.chunk_received.emit(self.accumulated_text)
                 self.accumulated_text = ""
-            
-            # Start accumulating the code block
             self.code_block_buffer = chunk_text
             return
-        
-        # CRITICAL FIX: For normal text, accumulate until we have a decent chunk size
-        # or until we hit a natural break (newline or punctuation)
+
+        # Append chunk text to the accumulation
         self.accumulated_text += chunk_text
         self.last_char = chunk_text[-1] if chunk_text else self.last_char
         full_response += chunk_text
-        
-        # Send the accumulated text if:
-        # 1. We hit a newline
-        # 2. We accumulated enough characters
-        # 3. We hit sentence-ending punctuation followed by space
-        if ('\n' in self.accumulated_text or 
-            (len(self.accumulated_text) >= self.buffer_size and 
-             self.last_char in " .,;!?") or 
-            re.search(r'[.!?]\s', self.accumulated_text)):
-            
-            self.chunk_received.emit(self.accumulated_text)
-            self.accumulated_text = ""
+
+        # Check for unbalanced markdown code block delimiters before flushing.
+        # Only flush if:
+        #   (a) a newline is present, AND
+        #   (b) there is no unbalanced "```" marker (i.e. an incomplete code block).
+        if '\n' in self.accumulated_text:
+            # Count occurrences of code fence markers
+            code_fence_count = self.accumulated_text.count("```")
+            if code_fence_count % 2 == 0:
+                self.chunk_received.emit(self.accumulated_text)
+                self.accumulated_text = ""
+        # If no newline is present or we're in the middle of a markdown structure, just keep accumulating.
+
     
     def _get_nested_value(self, obj, path):
         """Extract a value from a nested object using a dot-separated path"""
