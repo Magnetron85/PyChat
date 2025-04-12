@@ -130,7 +130,7 @@ class EnhancedChatBrowser(QTextEdit):
         super().__init__(parent)
         self.setReadOnly(True)
         self.setFont(QFont("Segoe UI", 10))
-        
+         
         # Configure document margin and line spacing
         self.document().setDocumentMargin(15)
         
@@ -412,7 +412,7 @@ class EnhancedChatBrowser(QTextEdit):
         # Clean up any empty paragraphs
         html = re.sub(r'<p>\s*</p>', '', html)
         
-        return html
+        return html + "<br>"
 
     def _process_inline_formatting(self, text):
         """Process inline Markdown formatting elements with proper spacing"""
