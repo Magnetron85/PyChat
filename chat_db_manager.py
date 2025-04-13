@@ -31,17 +31,22 @@ class ChatDatabaseManager(QObject):
             
             # Create threads table
             cursor.execute('''
-            CREATE TABLE IF NOT EXISTS threads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL,
-                last_updated TIMESTAMP NOT NULL,
-                provider TEXT,
-                model TEXT,
-                preprompt TEXT,
-                is_archived INTEGER DEFAULT 0
-            )
-            ''')
+                CREATE TABLE IF NOT EXISTS threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL,
+                    last_updated TIMESTAMP NOT NULL,
+                    provider TEXT,
+                    model TEXT,
+                    preprompt TEXT,
+                    is_archived INTEGER DEFAULT 0,
+                    streaming_enabled INTEGER DEFAULT 0,
+                    memory_enabled INTEGER DEFAULT 1,
+                    rag_enabled INTEGER DEFAULT 0,
+                    rag_kb_id TEXT,
+                    rag_visibility INTEGER DEFAULT 1
+                )
+                ''')
             
             # Create messages table
             cursor.execute('''
@@ -53,6 +58,7 @@ class ChatDatabaseManager(QObject):
                 timestamp TIMESTAMP NOT NULL,
                 provider TEXT,
                 model TEXT,
+                rag_context TEXT,
                 FOREIGN KEY (thread_id) REFERENCES threads (id) ON DELETE CASCADE
             )
             ''')
@@ -70,7 +76,7 @@ class ChatDatabaseManager(QObject):
         except Exception as e:
             logging.error(f"Error initializing database: {str(e)}")
     
-    def create_thread(self, title, provider=None, model=None, preprompt=None):
+    def create_thread(self, title, provider=None, model=None, preprompt=None, streaming_enabled=0, memory_enabled=1, rag_enabled=0, rag_kb_id=None, rag_visibility=1):
         """Create a new chat thread and return its ID"""
         try:
             now = datetime.now().isoformat()
@@ -78,9 +84,11 @@ class ChatDatabaseManager(QObject):
             cursor = conn.cursor()
             
             cursor.execute('''
-            INSERT INTO threads (title, created_at, last_updated, provider, model, preprompt)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (title, now, now, provider, model, preprompt))
+            INSERT INTO threads (title, created_at, last_updated, provider, model, preprompt,
+                                streaming_enabled, memory_enabled, rag_enabled, rag_kb_id, rag_visibility)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (title, now, now, provider, model, preprompt, 
+                  streaming_enabled, memory_enabled, rag_enabled, rag_kb_id, rag_visibility))
             
             thread_id = cursor.lastrowid
             conn.commit()
@@ -105,7 +113,8 @@ class ChatDatabaseManager(QObject):
             cursor = conn.cursor()
             
             cursor.execute('''
-            SELECT id, title, created_at, last_updated, provider, model, preprompt, is_archived
+            SELECT id, title, created_at, last_updated, provider, model, preprompt, is_archived, 
+                   streaming_enabled, memory_enabled, rag_enabled, rag_kb_id, rag_visibility
             FROM threads
             WHERE id = ?
             ''', (thread_id,))
@@ -120,7 +129,7 @@ class ChatDatabaseManager(QObject):
             logging.error(f"Error getting thread: {str(e)}")
             return None
     
-    def update_thread(self, thread_id, title=None, provider=None, model=None, preprompt=None, is_archived=None):
+    def update_thread(self, thread_id, title=None, provider=None, model=None, preprompt=None, is_archived=None, streaming_enabled=None, memory_enabled=None, rag_enabled=None, rag_kb_id=None, rag_visibility=None):
         """Update thread metadata"""
         try:
             conn = sqlite3.connect(self.db_path)
@@ -150,6 +159,26 @@ class ChatDatabaseManager(QObject):
                 update_parts.append("is_archived = ?")
                 params.append(1 if is_archived else 0)
                 
+            if streaming_enabled is not None:
+                update_parts.append("streaming_enabled = ?")
+                params.append(1 if streaming_enabled else 0)
+                
+            if memory_enabled is not None:
+                update_parts.append("memory_enabled = ?")
+                params.append(1 if memory_enabled else 0)
+                
+            if rag_enabled is not None:
+                update_parts.append("rag_enabled = ?")
+                params.append(1 if rag_enabled else 0)
+                
+            if rag_kb_id is not None:
+                update_parts.append("rag_kb_id = ?")
+                params.append(rag_kb_id)
+                
+            if rag_visibility is not None:
+                update_parts.append("rag_visibility = ?")
+                params.append(1 if rag_visibility else 0)
+                    
             # Always update last_updated
             update_parts.append("last_updated = ?")
             params.append(datetime.now().isoformat())
@@ -231,7 +260,7 @@ class ChatDatabaseManager(QObject):
             logging.error(f"Error getting all threads: {str(e)}")
             return []
     
-    def add_message(self, thread_id, role, content, provider=None, model=None):
+    def add_message(self, thread_id, role, content, provider=None, model=None, rag_context=None):
         """Add a message to a thread with the specified role"""
         try:
             # Log what we're adding
@@ -253,9 +282,9 @@ class ChatDatabaseManager(QObject):
             
             # Insert the message with explicit role
             cursor.execute('''
-            INSERT INTO messages (thread_id, role, content, timestamp, provider, model)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ''', (thread_id, role, content, now, provider, model))
+            INSERT INTO messages (thread_id, role, content, timestamp, provider, model, rag_context)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (thread_id, role, content, now, provider, model, rag_context))
             
             # Update the thread's last_updated time
             cursor.execute('''
