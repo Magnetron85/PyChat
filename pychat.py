@@ -8,7 +8,7 @@ from datetime import datetime
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QLabel, QLineEdit, QComboBox, QPushButton, QTextEdit, 
                             QSplitter, QMessageBox, QCheckBox, QTabWidget, QGridLayout,
-                            QGroupBox, QFormLayout, QStackedWidget, QFileDialog, QAction, QInputDialog)
+                            QGroupBox, QFormLayout, QStackedWidget, QFileDialog, QAction, QInputDialog, QSizePolicy)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer
 from PyQt5.QtGui import QFont, QIcon, QTextCursor, QTextCharFormat, QColor
 
@@ -163,7 +163,7 @@ class RequestWorker(QThread):
                     timeout=120
                 ) as response:
                     if response.status_code == 200:
-                        full_response = ""
+                        self.full_response = ""
                         for line in response.iter_lines():
                             if line:
                                 try:
@@ -175,7 +175,7 @@ class RequestWorker(QThread):
                                         chunk_text = self._get_nested_value(chunk, field_path)
                                         
                                         if chunk_text:
-                                            self._process_chunk(chunk_text, full_response)
+                                            self._process_chunk(chunk_text)
                                     
                                     elif self.provider_config.get("name") == "Claude (Anthropic)":
                                         # Claude sends "event: " prefixed data
@@ -186,7 +186,7 @@ class RequestWorker(QThread):
                                             chunk_text = self._get_nested_value(event_data, field_path)
                                             
                                             if chunk_text:
-                                                self._process_chunk(chunk_text, full_response)
+                                                self._process_chunk(chunk_text)
                                     
                                     elif self.provider_config.get("name") == "OpenAI":
                                         # OpenAI sends "data: " prefixed chunks
@@ -198,7 +198,7 @@ class RequestWorker(QThread):
                                                 chunk_text = self._get_nested_value(event_data, field_path)
                                                 
                                                 if chunk_text:
-                                                    self._process_chunk(chunk_text, full_response)
+                                                    self._process_chunk(chunk_text)
                                             
                                             except json.JSONDecodeError:
                                                 # Sometimes OpenAI sends malformed JSON or [DONE]
@@ -212,7 +212,7 @@ class RequestWorker(QThread):
                                             chunk_text = self._get_nested_value(chunk, field_path)
                                             
                                             if chunk_text:
-                                                self._process_chunk(chunk_text, full_response)
+                                                self._process_chunk(chunk_text)
                                         
                                         except Exception as e:
                                             logging.error(f"Failed to process generic stream chunk: {e}")
@@ -222,17 +222,15 @@ class RequestWorker(QThread):
                         
                         # Final cleanup - send any remaining accumulated text
                         if self.accumulated_text:
-                            full_response += self.accumulated_text
-                            self.chunk_received.emit(self.accumulated_text)
-                            self.accumulated_text = ""
-                        
-                        # Final cleanup - if we have a partial code block, send it
+                           self.full_response += self.accumulated_text
+                           self.chunk_received.emit(self.accumulated_text)
+                           self.accumulated_text = ""
+
                         if self.code_block_buffer:
-                            full_response += self.code_block_buffer
-                            self.chunk_received.emit(self.code_block_buffer)
-                        
-                        # Send final complete response
-                        self.finished.emit(full_response.strip(), True)
+                           self.full_response += self.code_block_buffer
+                           self.chunk_received.emit(self.code_block_buffer)
+
+                        self.finished.emit(self.full_response.strip(), True)
                     
                     else:
                         error_text = f"Error: API returned status code {response.status_code}"
@@ -278,9 +276,10 @@ class RequestWorker(QThread):
             logging.error(f"Error in request: {str(e)}")
             self.finished.emit(f"Error: {str(e)}", False)
     
-    def _process_chunk(self, chunk_text, full_response):
+    def _process_chunk(self, chunk_text):
         """Process a chunk of text, handling special cases and buffering"""
-        # Process any thinking sections (unchanged)
+       
+       # Process any thinking sections (unchanged)
         if self.provider_config.get("thinking_format"):
             is_deepseek = "deepseek" in self.model.lower()
             if is_deepseek:
@@ -302,7 +301,7 @@ class RequestWorker(QThread):
             self.code_block_buffer += chunk_text
             if "```" in chunk_text:
                 self.in_code_block = False
-                full_response += self.code_block_buffer
+                self.full_response += self.code_block_buffer
                 if self.accumulated_text:
                     self.chunk_received.emit(self.accumulated_text)
                     self.accumulated_text = ""
@@ -313,7 +312,7 @@ class RequestWorker(QThread):
         if "```" in chunk_text and not chunk_text.count("```") % 2 == 0:
             self.in_code_block = True
             if self.accumulated_text:
-                full_response += self.accumulated_text
+                self.full_response += self.accumulated_text
                 self.chunk_received.emit(self.accumulated_text)
                 self.accumulated_text = ""
             self.code_block_buffer = chunk_text
@@ -322,7 +321,7 @@ class RequestWorker(QThread):
         # Append chunk text to the accumulation
         self.accumulated_text += chunk_text
         self.last_char = chunk_text[-1] if chunk_text else self.last_char
-        full_response += chunk_text
+        self.full_response += chunk_text
 
         # Check for unbalanced markdown code block delimiters before flushing.
         # Only flush if:
@@ -337,6 +336,7 @@ class RequestWorker(QThread):
         # If no newline is present or we're in the middle of a markdown structure, just keep accumulating.
 
     
+   
     def _get_nested_value(self, obj, path):
         """Extract a value from a nested object using a dot-separated path"""
         if not obj:
@@ -480,6 +480,8 @@ class MultiProviderChat(QMainWindow):
         if last_provider in PROVIDERS:
             self.selected_provider = last_provider
         
+        self.streaming_value = self.settings.value("streaming_value",True, type=bool)
+        
         # Load memory enabled setting
         self.memory_enabled = self.settings.value("memory_enabled", True, type=bool)
         
@@ -537,7 +539,6 @@ class MultiProviderChat(QMainWindow):
         
         # Create all tab widgets first
         chat_tab = QWidget()
-        search_tab = QWidget()
         settings_tab = QWidget()
         ai_to_ai_tab = QWidget()
         rag_tab = QWidget()
@@ -612,14 +613,26 @@ class MultiProviderChat(QMainWindow):
         provider_group.setLayout(provider_layout)
         chat_area_layout.addWidget(provider_group)
         
-        # Options section
-        options_group = QGroupBox("Options")
-        options_layout = QHBoxLayout()
+        # Create inline collapsible panels container
+        collapsible_panels_container = QWidget()
+        collapsible_panels_layout = QVBoxLayout(collapsible_panels_container)
+        collapsible_panels_layout.setContentsMargins(0, 0, 0, 0)
+        collapsible_panels_layout.setSpacing(0)
+        
+        # === COLLAPSIBLE OPTIONS SECTION ===
+        options_collapsible = CollapsiblePanel("Options", False)
+        options_content = QWidget()
+        options_layout = QVBoxLayout(options_content)
+        
+        # Options section content
+        options_controls_layout = QHBoxLayout()
 
         # Streaming checkbox
         self.stream_checkbox = QCheckBox("Enable streaming")
-        self.stream_checkbox.setChecked(False)
+        # self.stream_checkbox.setChecked(False)
+        self.stream_checkbox.setChecked(self.streaming_value)
         self.stream_checkbox.setToolTip("Show responses in real-time as they are generated")
+        self.stream_checkbox.stateChanged.connect(self.on_streaming_toggled)
 
         # Show thinking checkbox
         self.show_thinking_checkbox = QCheckBox("Show thinking")
@@ -632,14 +645,14 @@ class MultiProviderChat(QMainWindow):
         self.memory_checkbox.setToolTip("Maintain context between messages")
         self.memory_checkbox.stateChanged.connect(self.on_memory_toggled)
 
-        options_layout.addWidget(self.stream_checkbox)
-        options_layout.addWidget(self.show_thinking_checkbox)
-        options_layout.addWidget(self.memory_checkbox)
-        options_layout.addStretch(1)
+        options_controls_layout.addWidget(self.stream_checkbox)
+        options_controls_layout.addWidget(self.show_thinking_checkbox)
+        options_controls_layout.addWidget(self.memory_checkbox)
+        options_controls_layout.addStretch(1)
         
         # RAG section
         rag_options_layout = QHBoxLayout()
-        self.rag_checkbox = QCheckBox("Use RAG")
+        self.rag_checkbox = QCheckBox("Use Knowledge")
         self.rag_checkbox.setChecked(False)
         self.rag_checkbox.setToolTip("Use Retrieval Augmented Generation with your knowledge base")
         # Temporarily disconnect the state changed signal
@@ -650,17 +663,17 @@ class MultiProviderChat(QMainWindow):
         self.rag_kb_dropdown = QComboBox()
         self.rag_kb_dropdown.setToolTip("Select which knowledge base to use")
         self.rag_kb_dropdown.setEnabled(False)  # Disabled until RAG is enabled
+        self.rag_kb_dropdown.setMinimumWidth(150)
 
         # Add checkbox for RAG visibility
-        self.rag_visibility_checkbox = QCheckBox("Show RAG Context")
+        self.rag_visibility_checkbox = QCheckBox("Show Knowledge Context")
         self.rag_visibility_checkbox.setChecked(True)
-        self.rag_visibility_checkbox.setToolTip("Show the RAG context in the prompt")
+        self.rag_visibility_checkbox.setToolTip("Show the Knowledge context in the prompt")
         self.rag_visibility_checkbox.setEnabled(False)  # Disabled until RAG is enabled
 
         # Apply saved RAG settings
         if hasattr(self, 'rag_enabled'):
             self.rag_checkbox.setChecked(self.rag_enabled)
-            # Don't call the toggled handler yet
             
         if hasattr(self, 'rag_visibility'):
             self.rag_visibility_checkbox.setChecked(self.rag_visibility)
@@ -669,10 +682,15 @@ class MultiProviderChat(QMainWindow):
         rag_options_layout.addWidget(rag_kb_label)
         rag_options_layout.addWidget(self.rag_kb_dropdown)
         rag_options_layout.addWidget(self.rag_visibility_checkbox)
-        options_layout.addLayout(rag_options_layout)
-        options_group.setLayout(options_layout)
-        chat_area_layout.addWidget(options_group)
+        rag_options_layout.addStretch(1)
 
+        # Add layouts to options content
+        options_layout.addLayout(options_controls_layout)
+        options_layout.addLayout(rag_options_layout)
+        
+        # Set options content to the collapsible panel
+        options_collapsible.setContentWidget(options_content)
+        
         # Now we can connect the signal and enable controls properly
         self.rag_checkbox.blockSignals(False)
         self.rag_checkbox.stateChanged.connect(self.on_rag_toggled)
@@ -681,78 +699,29 @@ class MultiProviderChat(QMainWindow):
         if hasattr(self, 'rag_enabled') and self.rag_enabled:
             self.rag_kb_dropdown.setEnabled(True)
             self.rag_visibility_checkbox.setEnabled(True)
-
-        options_layout.addLayout(rag_options_layout)
-
-        options_group.setLayout(options_layout)
-        chat_area_layout.addWidget(options_group)
-        
+            
+        # === COLLAPSIBLE PREPROMPT SECTION ===
         # Initialize CollapsiblePrepromptUI
         self.preprompt_ui = CollapsiblePrepromptUI(self, self.preprompt_manager)
-        chat_area_layout.addWidget(self.preprompt_ui.get_preprompt_widget())
+        preprompt_collapsible = self.preprompt_ui.get_preprompt_widget()
         
-        # Chat section
-        # Create a splitter to allow resizing between chat history and input
-        splitter = QSplitter(Qt.Vertical)
+        # === COLLAPSIBLE SEARCH SECTION ===
+        search_collapsible = CollapsiblePanel("Search", False)
+        search_content = QWidget()
+        search_layout = QVBoxLayout(search_content)
         
-        # Chat history display
-        self.chat_display = EnhancedChatBrowser()
-        self.chat_display.setFont(QFont("Segoe UI", 10))
-        splitter.addWidget(self.chat_display)
-        
-        # User prompt input
-        self.prompt_input = QTextEdit()
-        self.prompt_input.setFont(QFont("Segoe UI", 10))
-        self.prompt_input.setPlaceholderText("Type your message here...")
-        self.prompt_input.setMinimumHeight(80)
-        self.prompt_input.setMaximumHeight(150)
-        splitter.addWidget(self.prompt_input)
-        
-        # Set initial sizes for the splitter
-        splitter.setSizes([600, 100])
-        
-        chat_area_layout.addWidget(splitter, 1)  # Give the chat area most of the space
-        
-        # Button section
-        button_layout = QHBoxLayout()
-        
-        # Action buttons
-        self.send_btn = QPushButton("Send")
-        self.send_btn.clicked.connect(self.send_prompt)
-        self.send_btn.setMinimumHeight(40)
-        
-        self.clear_btn = QPushButton("Clear Chat")
-        self.clear_btn.clicked.connect(self.clear_chat)
-        self.clear_btn.setMinimumHeight(40)
-        
-        self.save_chat_btn = QPushButton("Save Chat")
-        self.save_chat_btn.clicked.connect(self.save_chat)
-        self.save_chat_btn.setMinimumHeight(40)
-        
-        button_layout.addWidget(self.send_btn)
-        button_layout.addWidget(self.clear_btn)
-        button_layout.addWidget(self.save_chat_btn)
-        
-        chat_area_layout.addLayout(button_layout)
-        
-        chat_area.setLayout(chat_area_layout)
-        
-        # Add chat area to splitter
-        thread_chat_splitter.addWidget(chat_area)
-        
-        # Set the main layout of the chat tab
-        chat_layout.addWidget(thread_chat_splitter)
-        chat_tab.setLayout(chat_layout)
-        
-        # ==== SEARCH TAB ====
-        search_layout = QVBoxLayout()
+        # Search widget content
         self.search_widget = SearchResultsWidget(self.db_manager)
         self.search_widget.result_selected.connect(self.handle_search_result)
         search_layout.addWidget(self.search_widget)
-        search_tab.setLayout(search_layout)
         
-        # ==== SETTINGS TAB ====
-        settings_layout = QVBoxLayout()
+        # Set search content to the collapsible panel
+        search_collapsible.setContentWidget(search_content)
+        
+        # === COLLAPSIBLE SETTINGS SECTION ===
+        settings_collapsible = CollapsiblePanel("Settings", False)
+        settings_content = QWidget()
+        settings_layout = QVBoxLayout(settings_content)
         
         # Provider settings (stacked widget)
         self.provider_settings = QStackedWidget()
@@ -819,9 +788,72 @@ class MultiProviderChat(QMainWindow):
         
         settings_layout.addLayout(provider_select_layout)
         settings_layout.addWidget(self.provider_settings)
-        settings_layout.addStretch(1)
         
-        settings_tab.setLayout(settings_layout)
+        # Set settings content to the collapsible panel
+        settings_collapsible.setContentWidget(settings_content)
+        
+        # Add all collapsible panels to the container
+        collapsible_panels_layout.addWidget(options_collapsible)
+        collapsible_panels_layout.addWidget(preprompt_collapsible)
+        collapsible_panels_layout.addWidget(search_collapsible)
+        collapsible_panels_layout.addWidget(settings_collapsible)
+        collapsible_panels_layout.addStretch(1)
+        
+        chat_area_layout.addWidget(collapsible_panels_container)
+        chat_area_layout.setSpacing(0)
+        
+        # Chat section
+        # Create a splitter to allow resizing between chat history and input
+        splitter = QSplitter(Qt.Vertical)
+        
+        # Chat history display
+        self.chat_display = EnhancedChatBrowser()
+        self.chat_display.setFont(QFont("Segoe UI", 10))
+        splitter.addWidget(self.chat_display)
+        
+        # User prompt input
+        self.prompt_input = QTextEdit()
+        self.prompt_input.setFont(QFont("Segoe UI", 10))
+        self.prompt_input.setPlaceholderText("Type your message here...")
+        self.prompt_input.setMinimumHeight(80)
+        self.prompt_input.setMaximumHeight(150)
+        splitter.addWidget(self.prompt_input)
+        
+        # Set initial sizes for the splitter
+        splitter.setSizes([600, 100])
+        
+        chat_area_layout.addWidget(splitter, 1)  # Give the chat area most of the space
+        
+        # Button section
+        button_layout = QHBoxLayout()
+        
+        # Action buttons
+        self.send_btn = QPushButton("Send")
+        self.send_btn.clicked.connect(self.send_prompt)
+        self.send_btn.setMinimumHeight(40)
+        
+        self.clear_btn = QPushButton("Clear Chat")
+        self.clear_btn.clicked.connect(self.clear_chat)
+        self.clear_btn.setMinimumHeight(40)
+        
+        self.save_chat_btn = QPushButton("Save Chat")
+        self.save_chat_btn.clicked.connect(self.save_chat)
+        self.save_chat_btn.setMinimumHeight(40)
+        
+        button_layout.addWidget(self.send_btn)
+        button_layout.addWidget(self.clear_btn)
+        button_layout.addWidget(self.save_chat_btn)
+        
+        chat_area_layout.addLayout(button_layout)
+        
+        chat_area.setLayout(chat_area_layout)
+        
+        # Add chat area to splitter
+        thread_chat_splitter.addWidget(chat_area)
+        
+        # Set the main layout of the chat tab
+        chat_layout.addWidget(thread_chat_splitter)
+        chat_tab.setLayout(chat_layout)
         
         # ==== AI-TO-AI TAB ====
         ai_to_ai_layout = QVBoxLayout()
@@ -848,16 +880,13 @@ class MultiProviderChat(QMainWindow):
         rag_layout.addWidget(self.rag_panel)
         rag_tab.setLayout(rag_layout)
         
-        # Now add all the tabs in the correct order
+        # Now add tabs in the correct order
         self.tabs.addTab(chat_tab, "Chat")
-        self.tabs.addTab(search_tab, "Search")
-        self.tabs.addTab(settings_tab, "Settings")
         self.tabs.addTab(ai_to_ai_tab, "AI-to-AI")
         self.tabs.addTab(rag_tab, "Knowledge Base")
         
         # Connect tab changed signal to update knowledge base dropdown when switching to the Knowledge Base tab
         self.tabs.currentChanged.connect(self.on_tab_changed)
-
         
         # Add tabs to the main layout
         main_layout.addWidget(self.tabs)
@@ -872,11 +901,6 @@ class MultiProviderChat(QMainWindow):
         
         # Initialize provider and load models
         self.on_provider_changed()
-        
-        # Initialize RAG panel and knowledge bases if needed
-        #self.rag_panel = RAGPanel()
-        #self.rag_panel.context_retrieved.connect(self.on_rag_context_retrieved)
-        #self.load_rag_knowledge_bases()
     
     def on_tab_changed(self, index):
         tab_text = self.tabs.tabText(index)
@@ -1069,6 +1093,12 @@ class MultiProviderChat(QMainWindow):
         self.settings.setValue("memory_enabled", self.memory_enabled)
         logging.debug(f"Conversation memory {'enabled' if self.memory_enabled else 'disabled'}")
         
+    def on_streaming_toggled(self, state):
+        """Handle streaming checkbox toggle"""
+        self.streaming_value = state == Qt.Checked
+        self.settings.setValue("streaming_value", self.streaming_value)
+        logging.debug(f"Streaming {'enabled' if self.streaming_value else 'disabled'}")
+        
     def load_thread(self, thread_id):
         """Load a chat thread and display its messages"""
         if self.is_processing:
@@ -1103,7 +1133,6 @@ class MultiProviderChat(QMainWindow):
         except:
             formatted_time = created_at
         
-
         self.append_to_chat(f"[SYSTEM] Thread: {thread['title']}")
         self.append_to_chat(f"[SYSTEM] Created: {formatted_time}")
         
@@ -1122,7 +1151,7 @@ class MultiProviderChat(QMainWindow):
                 self.format_message_with_code_blocks(content, True)
             elif role == "assistant":
                 # Use message-specific provider and model if available,
-                # falling back to the thread’s values if not.
+                # falling back to the thread's values if not.
                 self.format_message_with_code_blocks(content, False)
                 msg_provider = message.get("provider", self.selected_provider)
                 msg_model = message.get("model", self.selected_model)
@@ -1133,10 +1162,43 @@ class MultiProviderChat(QMainWindow):
             else:
                 logging.warning(f"Unknown message role: {role}")
                 self.append_to_chat(f"[{role}] {content}")
-
         
         # Update current thread ID
         self.current_thread_id = thread_id
+        
+        # Update UI based on thread settings
+        if 'streaming_enabled' in thread:
+            streaming_enabled = bool(thread['streaming_enabled'])
+            self.stream_checkbox.blockSignals(True)  # Prevent signal firing
+            self.stream_checkbox.setChecked(streaming_enabled)
+            self.stream_checkbox.blockSignals(False)  # Restore signals
+            self.streaming_value = streaming_enabled
+                
+        if 'memory_enabled' in thread:
+            self.memory_checkbox.setChecked(bool(thread['memory_enabled']))
+            self.memory_enabled = bool(thread['memory_enabled'])
+        
+        if 'rag_enabled' in thread:
+            self.rag_checkbox.setChecked(bool(thread['rag_enabled']))
+            # This will trigger the on_rag_toggled handler to update related UI elements
+        
+        if 'rag_visibility' in thread:
+            self.rag_visibility_checkbox.setChecked(bool(thread['rag_visibility']))
+        
+        # Load RAG knowledge base if needed
+        if bool(thread.get('rag_enabled', False)) and thread.get('rag_kb_id'):
+            # Set the KB dropdown to the correct KB
+            kb_id = thread.get('rag_kb_id')
+            for i in range(self.rag_kb_dropdown.count()):
+                if self.rag_kb_dropdown.itemData(i) == kb_id:
+                    self.rag_kb_dropdown.setCurrentIndex(i)
+                    # This will trigger the on_rag_kb_changed handler
+                    break
+            else:
+                # If not found in the dropdown, try to load knowledge bases first
+                self.load_rag_knowledge_bases()
+                # Schedule a delayed second attempt to select the KB after loading
+                QTimer.singleShot(1000, lambda kb=kb_id: self.select_kb_in_dropdown(kb))
         
         # If memory is enabled, load conversation history from the database
         if self.memory_enabled:
@@ -1155,9 +1217,6 @@ class MultiProviderChat(QMainWindow):
             self.selected_model = model
             self.selected_provider = provider
             
-            # Add model attribution
-            # self.append_to_chat(f"[SYSTEM] Response from: {self.selected_provider.capitalize()} - {self.selected_model}")
-            
             # Set a timer to try setting the correct model after models are loaded
             QTimer.singleShot(500, lambda: self.select_model_in_dropdown(model))
         
@@ -1167,6 +1226,13 @@ class MultiProviderChat(QMainWindow):
         
         # Set focus to the input field
         self.prompt_input.setFocus()
+
+    def select_kb_in_dropdown(self, kb_id):
+        """Helper to select a knowledge base in the dropdown after it's loaded"""
+        for i in range(self.rag_kb_dropdown.count()):
+            if self.rag_kb_dropdown.itemData(i) == kb_id:
+                self.rag_kb_dropdown.setCurrentIndex(i)
+                break
 
     def select_model_in_dropdown(self, model_name):
         """Helper to select a model in the dropdown after it's loaded"""
@@ -1253,6 +1319,9 @@ class MultiProviderChat(QMainWindow):
             
         # Store the original prompt for display to the user
         display_prompt = prompt
+        
+        # For storing RAG context if used
+        rag_context = None
 
         # RAG enhancement
         if hasattr(self, 'rag_checkbox') and self.rag_checkbox.isChecked() and hasattr(self, 'rag_panel'):
@@ -1260,14 +1329,21 @@ class MultiProviderChat(QMainWindow):
             show_rag_context = hasattr(self, 'rag_visibility_checkbox') and self.rag_visibility_checkbox.isChecked()
             original_prompt = prompt
             # The prompt sent to the model will always include RAG context
-            prompt = self.rag_panel.get_context_for_query(prompt, show_rag_context)
+            enhanced_prompt = self.rag_panel.get_context_for_query(prompt, show_rag_context)
+            
+            # Store the full RAG context
+            rag_context = enhanced_prompt
+            
+            # Update the prompt with the enhanced version
+            prompt = enhanced_prompt
+            
             logging.debug(f"Using RAG-enhanced prompt (original length: {len(original_prompt)}, enhanced length: {len(prompt)})")
             
             # If show_rag_context is False, use the original prompt for display
             if not show_rag_context:
                 display_prompt = original_prompt
             else: 
-                display_prompt=prompt
+                display_prompt = prompt
 
         if not prompt:
             self.append_to_chat("[SYSTEM] Please enter a prompt.")
@@ -1287,6 +1363,13 @@ class MultiProviderChat(QMainWindow):
             self.tabs.setCurrentIndex(2)  # Switch to settings tab
             return
         
+        # Get current parameter values
+        streaming_enabled = self.stream_checkbox.isChecked()
+        memory_enabled = self.memory_checkbox.isChecked()
+        rag_enabled = hasattr(self, 'rag_checkbox') and self.rag_checkbox.isChecked()
+        rag_kb_id = self.rag_kb_dropdown.currentData() if rag_enabled else None
+        rag_visibility = hasattr(self, 'rag_visibility_checkbox') and self.rag_visibility_checkbox.isChecked()
+        
         # CRITICAL FIX: Check if we have a current thread, create one if not
         if not self.current_thread_id:
             # Create a new thread with a default title based on the first prompt
@@ -1295,12 +1378,30 @@ class MultiProviderChat(QMainWindow):
                 title,
                 provider=self.selected_provider,
                 model=self.selected_model,
-                preprompt=preprompt_text
+                preprompt=preprompt_text,
+                streaming_enabled=streaming_enabled,
+                memory_enabled=memory_enabled,
+                rag_enabled=rag_enabled,
+                rag_kb_id=rag_kb_id,
+                rag_visibility=rag_visibility
             )
             
             # Update thread list
             if hasattr(self, 'thread_list_widget') and self.db_manager:
                 self.db_manager._emit_thread_list_changed()
+        else:
+            # Update the thread with current parameters
+            self.db_manager.update_thread(
+                self.current_thread_id,
+                provider=self.selected_provider,
+                model=self.selected_model,
+                preprompt=preprompt_text,
+                streaming_enabled=streaming_enabled,
+                memory_enabled=memory_enabled,
+                rag_enabled=rag_enabled,
+                rag_kb_id=rag_kb_id,
+                rag_visibility=rag_visibility
+            )
         
         # CRITICAL FIX: Save the user message to the database with role="user" BEFORE processing
         if self.current_thread_id:
@@ -1310,7 +1411,8 @@ class MultiProviderChat(QMainWindow):
                 "user",  # Explicitly set the role to "user"
                 display_prompt,  # Store the display prompt that user sees - NOT the full RAG context if hidden
                 provider=self.selected_provider,
-                model=self.selected_model
+                model=self.selected_model,
+                rag_context=rag_context  # Store the full RAG context
             )
             if not success:
                 logging.error("Failed to save user message to database")
@@ -1871,6 +1973,23 @@ class MultiProviderChat(QMainWindow):
             # Add a newline after the response
             self.chat_display.append("\n")
         
+        # Get the rag_context from the most recent user message if available
+        rag_context = None
+        if hasattr(self, 'rag_checkbox') and self.rag_checkbox.isChecked():
+            # Query the most recent user message to get its RAG context
+            conn = sqlite3.connect(self.db_manager.db_path)
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT rag_context FROM messages 
+                WHERE thread_id = ? AND role = 'user'
+                ORDER BY id DESC LIMIT 1
+            ''', (self.current_thread_id,))
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result and result[0]:
+                rag_context = result[0]
+        
         # NEW: Save assistant response to the database
         if success and self.current_thread_id:
             self.db_manager.add_message(
@@ -1878,12 +1997,12 @@ class MultiProviderChat(QMainWindow):
                 "assistant",
                 response,
                 provider=self.selected_provider,
-                model=self.selected_model
+                model=self.selected_model,
+                rag_context=rag_context  # Include the RAG context used for the query
             )
         
         # Add model attribution
         self.append_to_chat(f"[SYSTEM] Response from: {self.selected_provider.capitalize()} - {self.selected_model}")
-
 
         # NEW: Add assistant response to conversation history if memory is enabled
         if success and self.memory_enabled:
@@ -2109,7 +2228,25 @@ class MultiProviderChat(QMainWindow):
         """Create a new chat thread"""
         title, ok = QInputDialog.getText(self, "New Chat", "Enter a title for this chat:")
         if ok and title:
-            thread_id = self.db_manager.create_thread(title)
+            # Get current parameter values
+            streaming_enabled = self.stream_checkbox.isChecked()
+            memory_enabled = self.memory_checkbox.isChecked()
+            rag_enabled = hasattr(self, 'rag_checkbox') and self.rag_checkbox.isChecked()
+            rag_kb_id = self.rag_kb_dropdown.currentData() if rag_enabled else None
+            rag_visibility = hasattr(self, 'rag_visibility_checkbox') and self.rag_visibility_checkbox.isChecked()
+            preprompt_text = self.preprompt_ui.get_current_preprompt_text()
+            
+            thread_id = self.db_manager.create_thread(
+                title,
+                provider=self.selected_provider,
+                model=self.selected_model,
+                preprompt=preprompt_text,
+                streaming_enabled=streaming_enabled,
+                memory_enabled=memory_enabled,
+                rag_enabled=rag_enabled,
+                rag_kb_id=rag_kb_id,
+                rag_visibility=rag_visibility
+            )
             if thread_id:
                 self.load_thread(thread_id)
 
@@ -2119,11 +2256,23 @@ class MultiProviderChat(QMainWindow):
         if dialog.exec_():
             values = dialog.get_values()
             
+            # Get current parameter values
+            streaming_enabled = self.stream_checkbox.isChecked()
+            memory_enabled = self.memory_checkbox.isChecked()
+            rag_enabled = hasattr(self, 'rag_checkbox') and self.rag_checkbox.isChecked()
+            rag_kb_id = self.rag_kb_dropdown.currentData() if rag_enabled else None
+            rag_visibility = hasattr(self, 'rag_visibility_checkbox') and self.rag_visibility_checkbox.isChecked()
+            
             thread_id = self.db_manager.create_thread(
                 values["title"],
                 provider=values["provider"],
                 model=values["model"],
-                preprompt=values["preprompt"]
+                preprompt=values["preprompt"],
+                streaming_enabled=streaming_enabled,
+                memory_enabled=memory_enabled,
+                rag_enabled=rag_enabled,
+                rag_kb_id=rag_kb_id,
+                rag_visibility=rag_visibility
             )
             
             if thread_id and values["preprompt"]:
@@ -2287,7 +2436,62 @@ class MultiProviderChat(QMainWindow):
         
         event.accept()
 
-
+class CollapsiblePanel(QWidget):
+    def __init__(self, title, expanded=False, parent=None):
+        super().__init__(parent)
+        
+        # Main layout
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        
+        # Header with toggle button
+        self.header = QWidget()
+        self.header.setStyleSheet("background-color: #f0f0f0; border: 1px solid #ccc;")
+        self.header_layout = QHBoxLayout(self.header)
+        self.header_layout.setContentsMargins(5, 5, 5, 5)
+        
+        # Toggle button
+        self.toggle_btn = QPushButton("▼" if expanded else "►")
+        self.toggle_btn.setMaximumWidth(20)
+        self.toggle_btn.clicked.connect(self.toggle_content)
+        
+        # Title label
+        self.title_label = QLabel(title)
+        self.title_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        
+        self.header_layout.addWidget(self.toggle_btn)
+        self.header_layout.addWidget(self.title_label)
+        self.header_layout.addStretch()
+        
+        # Content container (initially may be empty)
+        self.content_container = QWidget()
+        self.content_layout = QVBoxLayout(self.content_container)
+        self.content_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # Add widgets to main layout
+        self.main_layout.addWidget(self.header)
+        self.main_layout.addWidget(self.content_container)
+        
+        # Set initial state
+        self.expanded = expanded
+        self.content_container.setVisible(self.expanded)
+        
+    def toggle_content(self):
+        self.expanded = not self.expanded
+        self.content_container.setVisible(self.expanded)
+        self.toggle_btn.setText("▼" if self.expanded else "►")
+        
+    def setContentWidget(self, widget):
+        # Clear existing layout
+        while self.content_layout.count():
+            item = self.content_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        
+        # Add new widget
+        self.content_layout.addWidget(widget)
+        
 if __name__ == "__main__":
     # Create application
     app = QApplication(sys.argv)
