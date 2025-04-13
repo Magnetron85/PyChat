@@ -22,10 +22,6 @@ class CodeHighlighter(QSyntaxHighlighter):
             # Default rules for other languages
             self._setup_generic_rules()
             
-
-            
-
-    
     def _setup_python_rules(self):
         # Python keywords
         keyword_format = QTextCharFormat()
@@ -155,6 +151,8 @@ class EnhancedChatBrowser(QTextEdit):
         # Track if we're in a streaming response
         self.is_streaming = False
         self.streaming_text = ""
+        self.streaming_started = False
+        self.streaming_start_position = -1
         
         # Add a dictionary to track streaming responses by unique IDs
         self.streaming_responses = {}
@@ -197,18 +195,52 @@ class EnhancedChatBrowser(QTextEdit):
         cursor.movePosition(QTextCursor.End)
         
         # Determine formatting based on message type
-        if text.startswith("[SYSTEM]"):
+        if text.startswith("[SYSTEM] Response from:"):
+            # Create a left-aligned block format
+            block_format = QTextBlockFormat()
+            block_format.setAlignment(Qt.AlignRight)
+            block_format.setBackground(QColor("#FAFAFA"))  # Very very light gray
+            cursor.setBlockFormat(block_format)
+            
+            # Apply text formatting
             fmt = QTextCharFormat()
-            fmt.setForeground(QColor("#6a737d"))
+            fmt.setForeground(QColor("#9199a2"))
             fmt.setFontItalic(True)
-            cursor.insertText(text + "\n", fmt)
-        elif text.startswith(">"):
+            cursor.insertText(text, fmt)
+        
+        elif text.startswith("[SYSTEM]"):
+            # Create a left-aligned block format
+            block_format = QTextBlockFormat()
+            block_format.setAlignment(Qt.AlignRight)
+            cursor.setBlockFormat(block_format)
+            
+            # Apply text formatting
             fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#9199a2"))
+            fmt.setFontItalic(True)
+            cursor.insertText(text, fmt)
+            
+        elif text.startswith(">"):
+            block_format = QTextBlockFormat()
+            block_format.setBackground(QColor("#F0F0F0"))  # Very light gray
+            block_format.setAlignment(Qt.AlignLeft)
+            cursor.setBlockFormat(block_format)
+            
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#000000"))
             fmt.setFontWeight(QFont.Bold)
             cursor.insertText(text + "\n", fmt)
         elif not text.strip():
+            block_format = QTextBlockFormat()
+            block_format.setAlignment(Qt.AlignLeft)
+            cursor.setBlockFormat(block_format)
+            
             cursor.insertBlock()
         else:
+            block_format = QTextBlockFormat()
+            block_format.setAlignment(Qt.AlignLeft)
+            cursor.setBlockFormat(block_format)
+            
             # For assistant messages, handle code blocks and markdown
             if "```" in text:
                 # Split by code blocks
@@ -229,6 +261,10 @@ class EnhancedChatBrowser(QTextEdit):
                 cursor.insertBlock()
             else:
                 # No code blocks, apply markdown processing
+                block_format = QTextBlockFormat()
+                block_format.setAlignment(Qt.AlignLeft)
+                cursor.setBlockFormat(block_format)
+            
                 processed_text = self.process_markdown(text)
                 cursor.insertHtml(processed_text)
                 cursor.insertBlock()  # Add a block after content
@@ -243,12 +279,12 @@ class EnhancedChatBrowser(QTextEdit):
         lines = text.split('\n')
         processed_lines = []
         
-        # Track if we're in a list to handle proper indentation
+        # Track if we're in a list, table, paragraph, or blockquote
         in_unordered_list = False
         in_ordered_list = False
+        in_table = False
+        table_rows = []
         list_item_count = 0
-        
-        # Track if we're in a paragraph or blockquote
         in_paragraph = False
         in_blockquote = False
         
@@ -259,6 +295,34 @@ class EnhancedChatBrowser(QTextEdit):
             
             # Escape any existing HTML to prevent conflicts
             processed_line = line.replace("<", "&lt;").replace(">", "&gt;")
+            
+            # Process tables
+            if processed_line.strip().startswith('|') and processed_line.strip().endswith('|'):
+                if not in_table:
+                    in_table = True
+                    table_rows = []
+                
+                # Parse table row
+                cells = [cell.strip() for cell in processed_line.strip('|').split('|')]
+                table_rows.append(cells)
+                
+                # Check if the next line is not a table row
+                if i + 1 >= len(lines) or not lines[i + 1].strip().startswith('|'):
+                    in_table = False
+                    # Render table
+                    table_html = ['<table style="border-collapse: collapse; width: 100%; margin: 10px 0;">']
+                    for row_idx, row in enumerate(table_rows):
+                        table_html.append('<tr>')
+                        for cell in row:
+                            tag = 'th' if row_idx == 0 else 'td'
+                            table_html.append(f'<{tag} style="border: 1px solid #ddd; padding: 8px; text-align: left;">{self._process_inline_formatting(cell)}</{tag}>')
+                        table_html.append('</tr>')
+                    table_html.append('</table>')
+                    processed_lines.append(''.join(table_html))
+                    table_rows = []
+                
+                i += 1
+                continue
             
             # Process headers (### Header)
             if processed_line.strip().startswith('#'):
@@ -283,7 +347,7 @@ class EnhancedChatBrowser(QTextEdit):
                     # Not a proper header, treat as normal text
                     processed_line = self._process_inline_formatting(processed_line)
                     if not in_paragraph and processed_line.strip():
-                        processed_line = f"<p>{processed_line}"
+                        processed_line = f"<p style='margin: 8px 0;'>{processed_line}"
                         in_paragraph = True
             
             # Process blockquotes (> quoted text)
@@ -300,7 +364,7 @@ class EnhancedChatBrowser(QTextEdit):
                         processed_lines.append("</p>")
                         in_paragraph = False
                     
-                    processed_line = f"<blockquote>{quoted_text}"
+                    processed_line = f"<blockquote style='border-left: 4px solid #ddd; margin: 8px 0; padding-left: 10px;'>{quoted_text}"
                     in_blockquote = True
                 
                 # Check if next line is not a blockquote or is the end
@@ -310,12 +374,10 @@ class EnhancedChatBrowser(QTextEdit):
             
             # Process horizontal rules
             elif processed_line.strip() in ('---', '***', '___'):
-                # Close any open paragraph first
                 if in_paragraph:
                     processed_lines.append("</p>")
                     in_paragraph = False
-                
-                processed_line = "<hr>\n"
+                processed_line = ""
             
             # Process unordered lists (* Item or - Item)
             elif processed_line.strip().startswith(('* ', '- ')):
@@ -329,7 +391,7 @@ class EnhancedChatBrowser(QTextEdit):
                 
                 if not in_unordered_list:
                     # Start a new list
-                    processed_line = f"<ul>\n<li>{item_text}</li>"
+                    processed_line = f"<ul style='margin: 8px 0; padding-left: 20px;'>\n<li>{item_text}</li>"
                     in_unordered_list = True
                 else:
                     # Continue the list
@@ -347,7 +409,7 @@ class EnhancedChatBrowser(QTextEdit):
                 
                 if not in_ordered_list:
                     # Start a new list
-                    processed_line = f"<ol>\n<li>{item_text}</li>"
+                    processed_line = f"<ol style='margin: 8px 0; padding-left: 20px;'>\n<li>{item_text}</li>"
                     in_ordered_list = True
                     list_item_count = 1
                 else:
@@ -387,7 +449,7 @@ class EnhancedChatBrowser(QTextEdit):
                 
                 # Handle paragraph creation
                 if not in_paragraph and processed_line.strip():
-                    processed_line = f"<p>{processed_line}"
+                    processed_line = f"<p style='margin: 8px 0;'>{processed_line}"
                     in_paragraph = True
                 elif in_paragraph and not processed_line.strip():
                     processed_line = f"{processed_line}</p>"
@@ -405,6 +467,17 @@ class EnhancedChatBrowser(QTextEdit):
             processed_lines.append("</p>")
         if in_blockquote:
             processed_lines.append("</blockquote>")
+        if in_table and table_rows:
+            # Render any remaining table
+            table_html = ['<table style="border-collapse: collapse; width: 100%; margin: 10px 0;">']
+            for row_idx, row in enumerate(table_rows):
+                table_html.append('<tr>')
+                for cell in row:
+                    tag = 'th' if row_idx == 0 else 'td'
+                    table_html.append(f'<{tag} style="border: 1px solid #ddd; padding: 8px; text-align: left;">{self._process_inline_formatting(cell)}</{tag}>')
+                table_html.append('</tr>')
+            table_html.append('</table>')
+            processed_lines.append(''.join(table_html))
         
         # Join the lines back together with HTML
         html = "\n".join(processed_lines)
@@ -412,7 +485,7 @@ class EnhancedChatBrowser(QTextEdit):
         # Clean up any empty paragraphs
         html = re.sub(r'<p>\s*</p>', '', html)
         
-        return html + "<br>"
+        return html
 
     def _process_inline_formatting(self, text):
         """Process inline Markdown formatting elements with proper spacing"""
@@ -449,6 +522,9 @@ class EnhancedChatBrowser(QTextEdit):
         cursor = self.textCursor()
         cursor.movePosition(QTextCursor.End)
         
+        # Mark this position as the start of streaming content
+        self.streaming_start_position = cursor.position()
+        
         # Initialize empty response in dictionary
         self.streaming_responses[self.current_streaming_id] = ""
         
@@ -463,18 +539,18 @@ class EnhancedChatBrowser(QTextEdit):
         if streaming_id not in self.streaming_responses:
             return False
         
-        # Add to our internal buffer (raw text)
-        self.streaming_responses[streaming_id] += chunk_text
+        # Store the chunk temporarily for display
+        self.streaming_responses[streaming_id] = chunk_text
         
-        # Store raw text without applying formatting yet
-        self.streaming_raw_text = self.streaming_responses[streaming_id]
+        # Add to our accumulated raw text without displaying it yet
+        self.streaming_raw_text += chunk_text
         
-        # Display raw text for now without processing
+        # Display just the new chunk
         self.display_raw_streaming_text(streaming_id)
         
         return True
         
-    def display_raw_streaming_text(self, streaming_id, clear_only=False):
+    def display_raw_streaming_text(self, streaming_id, clear_only=False, append_only=True):
         """Display the raw streaming text without processing formatting"""
         if streaming_id not in self.streaming_responses:
             return False
@@ -482,36 +558,52 @@ class EnhancedChatBrowser(QTextEdit):
         # Only get the text if we're not just clearing
         current_text = "" if clear_only else self.streaming_responses[streaming_id]
         
-        # Find the position where we need to start replacing content
-        doc_text = self.toPlainText()
-        start_pos = doc_text.rfind("[SYSTEM] Processing request...")
+        # Create a normal text format (not bold)
+        normal_format = QTextCharFormat()
+        normal_format.setForeground(QColor("#24292e"))
+        normal_format.setFontWeight(QFont.Normal)  # Explicitly set normal weight
         
-        if start_pos >= 0:
-            # Position cursor after this system message and its newline
-            cursor = QTextCursor(self.document())
-            cursor.setPosition(start_pos)
-            cursor.movePosition(QTextCursor.EndOfLine)
-            cursor.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, 1)  # Move past the newline
-            
-            # Select all text from this point to the end
-            cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
-            
-            # Remove existing content
-            cursor.removeSelectedText()
-            
-            # Only insert text if we're not just clearing
-            if not clear_only:
-                cursor.insertText(current_text)
+        # Get document
+        doc = self.document()
+        
+        if clear_only:
+            # If we're clearing, remove all streaming content
+            if self.streaming_start_position >= 0:
+                cursor = QTextCursor(doc)
+                cursor.setPosition(self.streaming_start_position)
+                cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                self.streaming_started = False
+        elif not self.streaming_started:
+            # First chunk - clear any existing content and start fresh
+            if self.streaming_start_position >= 0:
+                cursor = QTextCursor(doc)
+                cursor.setPosition(self.streaming_start_position)
+                cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                cursor.insertText(current_text, normal_format)
+                self.streaming_started = True
         else:
-            # If we can't find the system message, just clear at the end
-            cursor = QTextCursor(self.document())
-            cursor.movePosition(QTextCursor.End)
-            
-            # Only insert text if we're not just clearing
-            if not clear_only:
-                cursor.insertText(current_text)
+            # For subsequent chunks, simply replace everything from start position
+            # with the complete accumulated text
+            if self.streaming_start_position >= 0:
+                # Add the new chunk to our accumulated text
+                accumulated_text = self.streaming_raw_text
+                
+                # Replace everything from the start position with the accumulated text
+                cursor = QTextCursor(doc)
+                cursor.setPosition(self.streaming_start_position)
+                cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+                cursor.removeSelectedText()
+                cursor.insertText(accumulated_text, normal_format)
+        
+        # Clear the stored response since we've already displayed it
+        if not clear_only:
+            self.streaming_responses[streaming_id] = ""
         
         # Update cursor and ensure it's visible
+        cursor = QTextCursor(doc)
+        cursor.movePosition(QTextCursor.End)
         self.setTextCursor(cursor)
         self.ensureCursorVisible()
         
@@ -576,6 +668,9 @@ class EnhancedChatBrowser(QTextEdit):
         if streaming_id not in self.streaming_responses:
             return False
         
+        # Use the accumulated raw text for the final formatting
+        self.streaming_responses[streaming_id] = self.streaming_raw_text
+        
         # Now that streaming is complete, apply full formatting
         self.apply_full_formatting(streaming_id)
         
@@ -583,6 +678,10 @@ class EnhancedChatBrowser(QTextEdit):
         self.streaming_responses.pop(streaming_id)
         if self.current_streaming_id == streaming_id:
             self.current_streaming_id = None
+        self.streaming_raw_text = ""
+        
+        # Reset streaming state
+        self.streaming_started = False
         
         return True
         
@@ -593,76 +692,65 @@ class EnhancedChatBrowser(QTextEdit):
         
         # Store the complete text
         complete_text = self.streaming_responses[streaming_id]
+        if not complete_text and hasattr(self, 'streaming_raw_text'):
+            complete_text = self.streaming_raw_text
         
-        # IMPORTANT: First clear all existing content by forcing an empty display
-        temp_text = self.streaming_responses[streaming_id] 
-        self.streaming_responses[streaming_id] = ""
-        self.display_raw_streaming_text(streaming_id)
-        self.streaming_responses[streaming_id] = temp_text  # Restore the complete text
+        # Create a cursor to completely clear the content
+        cursor = QTextCursor(self.document())
         
-        # Find the position where we need to start replacing content
-        doc_text = self.toPlainText()
-        start_pos = doc_text.rfind("[SYSTEM] Processing request...")
-        
-        if start_pos >= 0:
-            # Position cursor after this system message and its newline
-            cursor = QTextCursor(self.document())
-            cursor.setPosition(start_pos)
-            cursor.movePosition(QTextCursor.EndOfLine)
-            cursor.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, 1)  # Move past the newline
-            
-            # Select all text from this point to the end
+        if self.streaming_start_position >= 0:
+            # Use the marked position
+            cursor.setPosition(self.streaming_start_position)
             cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
-            
-            # Remove existing content
             cursor.removeSelectedText()
-            
-            # Now apply full formatting to the complete text
-            if "```" in complete_text:
-                # Split by code blocks
-                pattern = r'(```(?:\w*)\n[\s\S]*?\n```)'
-                parts = re.split(pattern, complete_text)
-                
-                for part in parts:
-                    if part.strip() and part.startswith("```") and part.endswith("```"):
-                        # This is a code block - format it properly
-                        self._insert_code_block(cursor, part)
-                    elif part.strip():
-                        # Normal text part - process for markdown
-                        processed_part = self.process_markdown(part)
-                        cursor.insertHtml(processed_part)
-                        cursor.insertBlock()  # Add a block after each processed part
-            else:
-                # No code blocks, apply markdown processing
-                processed_text = self.process_markdown(complete_text)
-                cursor.insertHtml(processed_text)
-                cursor.insertBlock()  # Add a block after content
         else:
-            # If we can't find the system message, just append at the end
-            cursor = self.textCursor()
-            cursor.movePosition(QTextCursor.End)
+            # Fallback to old method
+            doc_text = self.toPlainText()
+            start_pos = doc_text.rfind("[SYSTEM] Processing request...")
             
-            # Apply full formatting
-            if "```" in complete_text:
-                # Handle code blocks
-                pattern = r'(```(?:\w*)\n[\s\S]*?\n```)'
-                parts = re.split(pattern, complete_text)
+            if start_pos >= 0:
+                # Position cursor after the system message
+                cursor.setPosition(start_pos)
+                cursor.movePosition(QTextCursor.EndOfLine)
+                cursor.movePosition(QTextCursor.Right, QTextCursor.MoveAnchor, 1)  # Move past newline
                 
-                for part in parts:
-                    if part.strip() and part.startswith("```") and part.endswith("```"):
-                        self._insert_code_block(cursor, part)
-                    elif part.strip():
-                        processed_part = self.process_markdown(part)
-                        cursor.insertHtml(processed_part)
-                        cursor.insertBlock()
+                # Select all text from this point to the end
+                cursor.movePosition(QTextCursor.End, QTextCursor.KeepAnchor)
+                
+                # Remove all existing content
+                cursor.removeSelectedText()
             else:
-                processed_text = self.process_markdown(complete_text)
-                cursor.insertHtml(processed_text)
-                cursor.insertBlock()
+                # If we can't find the system message, just go to the end
+                cursor.movePosition(QTextCursor.End)
+        
+        # Now, with all streaming content cleared, apply the full formatting
+        if "```" in complete_text:
+            # Split by code blocks
+            pattern = r'(```(?:\w*)\n[\s\S]*?\n```)'
+            parts = re.split(pattern, complete_text)
+            
+            for part in parts:
+                if part.strip() and part.startswith("```") and part.endswith("```"):
+                    # This is a code block - format it properly
+                    self._insert_code_block(cursor, part)
+                elif part.strip():
+                    # Normal text part - process for markdown
+                    processed_part = self.process_markdown(part)
+                    cursor.insertHtml(processed_part)
+                    cursor.insertBlock()  # Add a block after each processed part
+        else:
+            # No code blocks, apply markdown processing
+            processed_text = self.process_markdown(complete_text)
+            cursor.insertHtml(processed_text)
+            cursor.insertBlock()  # Add a block after content
         
         # Update cursor and ensure it's visible
         self.setTextCursor(cursor)
         self.ensureCursorVisible()
+        
+        # Clean up tracking variables
+        self.streaming_started = False
+        self.streaming_start_position = -1  # Reset the position
         
         return True
     
@@ -827,7 +915,7 @@ class EnhancedChatBrowser(QTextEdit):
         cursor.insertBlock()
     
     def mousePressEvent(self, event):
-        """Track mouse press events for copy link clicks"""
+        """Track mouse press events for copy link clicks and URL navigation"""
         if event.button() == Qt.LeftButton:
             cursor = self.cursorForPosition(event.pos())
             char_format = cursor.charFormat()
@@ -847,6 +935,13 @@ class EnhancedChatBrowser(QTextEdit):
                     self.append("\n[SYSTEM] Code copied to clipboard")
                     
                     # Prevent default handling
+                    event.accept()
+                    return
+                elif url:
+                    # Handle regular URL
+                    from PyQt5.QtCore import QUrl
+                    from PyQt5.QtGui import QDesktopServices
+                    QDesktopServices.openUrl(QUrl(url))
                     event.accept()
                     return
         
@@ -1041,5 +1136,3 @@ class EnhancedChatBrowser(QTextEdit):
         else:
             # Fallback if the marker is not found: go to the first match
             self.goto_match_by_message_id()
-
-        
