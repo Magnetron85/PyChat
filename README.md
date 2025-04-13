@@ -65,7 +65,7 @@ A versatile desktop application that lets you interact with multiple AI provider
 
 2. Install the required dependencies:
    ```
-   pip install PyQt5 requests qtconsole fuzzywuzzy google-genai chromadb langchain sentence-transformers pymupdf numpy torch docx sklearn scipy
+   pip install PyQt5 requests qtconsole fuzzywuzzy google-genai chromadb langchain sentence-transformers pymupdf numpy torch docx scikit-learn scipy
    ```
 
 3. Run the application:
