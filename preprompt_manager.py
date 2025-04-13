@@ -485,7 +485,6 @@ class PrepromptUI:
         """Validate prompt text to ensure it doesn't have syntax issues"""
         return self.preprompt_manager.validate_preprompt(prompt_text)
 
-
 class CollapsiblePrepromptUI:
     """UI components for collapsible preprompt functionality"""
     
@@ -493,76 +492,16 @@ class CollapsiblePrepromptUI:
         self.parent = parent
         self.preprompt_manager = preprompt_manager
         self.preprompt_ui = PrepromptUI(parent, preprompt_manager)
-        self.is_expanded = False
-        self.setup_ui()
+        self.preprompt_collapsible = None  # Will hold the CollapsiblePanel instance
         
-    def setup_ui(self):
-        # Create a container widget
-        self.container_widget = QWidget()
-        container_layout = QVBoxLayout(self.container_widget)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Header bar with toggle button
-        header_widget = QWidget()
-        header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Toggle button
-        self.toggle_btn = QPushButton("➕ Preprompt")
-        self.toggle_btn.setStyleSheet("text-align: left;")
-        self.toggle_btn.clicked.connect(self.toggle_expansion)
-        
-        header_layout.addWidget(self.toggle_btn)
-        header_layout.addStretch()
-        
-        # Add current preprompt name as label
-        self.current_name_label = QLabel()
-        self.update_current_name_label()
-        header_layout.addWidget(self.current_name_label)
-        
-        # Default indicator
-        self.default_indicator = QLabel()
-        self.update_default_indicator()
-        header_layout.addWidget(self.default_indicator)
-        
-        # Content widget (original preprompt UI)
-        self.content_widget = self.preprompt_ui.get_preprompt_widget()
-        self.content_widget.setVisible(False)
-        
-        # Add widgets to container
-        container_layout.addWidget(header_widget)
-        container_layout.addWidget(self.content_widget)
-        
-        # Listen for preprompt selection changes
-        self.preprompt_ui.preprompt_dropdown.currentTextChanged.connect(self.update_current_name_label)
-        self.preprompt_ui.preprompt_dropdown.currentTextChanged.connect(self.update_default_indicator)
-    
-    def toggle_expansion(self):
-        self.is_expanded = not self.is_expanded
-        self.content_widget.setVisible(self.is_expanded)
-        self.toggle_btn.setText("➖ Preprompt" if self.is_expanded else "➕ Preprompt")
-    
-    def update_current_name_label(self):
-        current_text = self.preprompt_ui.preprompt_dropdown.currentText()
-        if current_text and current_text != "None":
-            self.current_name_label.setText(f"Selected: {current_text}")
-        else:
-            self.current_name_label.setText("No preprompt selected")
-    
-    def update_default_indicator(self):
-        current_text = self.preprompt_ui.preprompt_dropdown.currentText()
-        if self.preprompt_manager.use_last_as_default:
-            self.default_indicator.setText("[Last as default]")
-        elif self.preprompt_manager.default_preprompt:
-            if current_text == self.preprompt_manager.default_preprompt:
-                self.default_indicator.setText("[Default]")
-            else:
-                self.default_indicator.setText("")
-        else:
-            self.default_indicator.setText("")
-    
     def get_preprompt_widget(self):
-        return self.container_widget
+        """Return the preprompt UI wrapped in a collapsible panel"""
+        # Create a new CollapsiblePanel using the same class as the other panels
+        if not self.preprompt_collapsible:
+            from pychat import CollapsiblePanel  # Import the CollapsiblePanel class
+            self.preprompt_collapsible = CollapsiblePanel("Preprompt", False)
+            self.preprompt_collapsible.setContentWidget(self.preprompt_ui.get_preprompt_widget())
+        return self.preprompt_collapsible
     
     def get_current_preprompt_text(self):
         """Proxy method to get preprompt text from underlying PrepromptUI"""
