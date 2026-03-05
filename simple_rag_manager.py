@@ -54,25 +54,126 @@ class Document:
         }
 
 class DocumentChunker:
-    """Splits documents into manageable chunks"""
-    
-    def __init__(self, chunk_size: int = 1500, chunk_overlap: int = 500):
-        self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
-    
+    """Semantic-aware document chunker that splits on content boundaries.
+
+    Instead of blindly cutting at fixed character offsets, this chunker
+    respects paragraph breaks, section headers, slide/sheet markers, and
+    sentence boundaries.  Each chunk contains complete semantic units (whole
+    paragraphs / sections) and stays within a configurable size range.
+    """
+
+    # Patterns that indicate a strong section boundary
+    _SECTION_BREAK = re.compile(
+        r'\n{2,}'                             # double+ newline (paragraph break)
+        r'|(?<=\n)(?=#{1,6}\s)'               # markdown heading
+        r'|(?<=\n)(?=---\s*(?:Slide|Sheet))'   # slide / sheet separators from PPTX/XLSX
+        r'|(?<=\n)(?=\d+\.\s)'                # numbered list item at line start
+        r'|(?<=\n)(?=Chapter\s|\bSection\s)'   # explicit chapter / section label
+    )
+
+    def __init__(self, target_size: int = 1500, min_size: int = 200, max_size: int = 3000):
+        self.target_size = target_size
+        self.min_size = min_size
+        self.max_size = max_size
+
+    # -----------------------------------------------------------------
+    # Public API (same interface as the old chunker)
+    # -----------------------------------------------------------------
     def chunk_document(self, document: Document) -> Document:
-        """Split document content into overlapping chunks"""
+        """Split document content into semantically coherent chunks."""
         content = document.content
-        chunks = []
-        
-        # Simple chunking by characters with overlap
-        for i in range(0, len(content), self.chunk_size - self.chunk_overlap):
-            chunk = content[i:i + self.chunk_size]
-            if len(chunk) >= 100:  # Only keep chunks with sufficient content
-                chunks.append(chunk)
-        
+        if not content or not content.strip():
+            document.chunks = []
+            return document
+
+        # Step 1 – split into semantic segments (paragraphs / sections)
+        segments = self._split_into_segments(content)
+
+        # Step 2 – merge small segments / split oversized ones to stay in range
+        chunks = self._merge_segments(segments)
+
         document.chunks = chunks
         return document
+
+    # -----------------------------------------------------------------
+    # Internal helpers
+    # -----------------------------------------------------------------
+    def _split_into_segments(self, text: str) -> List[str]:
+        """Split text on section / paragraph boundaries."""
+        parts = self._SECTION_BREAK.split(text)
+        # Keep non-empty segments with their whitespace trimmed
+        return [p.strip() for p in parts if p and p.strip()]
+
+    def _split_on_sentences(self, text: str) -> List[str]:
+        """Best-effort sentence splitter for oversized segments."""
+        # Split on sentence-ending punctuation followed by whitespace
+        sentence_re = re.compile(r'(?<=[.!?])\s+')
+        parts = sentence_re.split(text)
+        return [p for p in parts if p and p.strip()]
+
+    def _merge_segments(self, segments: List[str]) -> List[str]:
+        """Merge small segments together and split oversized ones."""
+        chunks: List[str] = []
+        current_parts: List[str] = []
+        current_len = 0
+
+        def _flush():
+            nonlocal current_parts, current_len
+            if current_parts:
+                merged = "\n\n".join(current_parts)
+                if len(merged) >= self.min_size:
+                    chunks.append(merged)
+                elif chunks:
+                    # Too small on its own – attach to previous chunk
+                    chunks[-1] = chunks[-1] + "\n\n" + merged
+                else:
+                    chunks.append(merged)
+                current_parts = []
+                current_len = 0
+
+        for seg in segments:
+            seg_len = len(seg)
+
+            # Oversized single segment – split on sentences first
+            if seg_len > self.max_size:
+                _flush()
+                sentences = self._split_on_sentences(seg)
+                if len(sentences) <= 1:
+                    # Can't split further – use fixed-size fallback for this segment only
+                    for i in range(0, seg_len, self.target_size - 200):
+                        sub = seg[i:i + self.target_size]
+                        if len(sub) >= self.min_size:
+                            chunks.append(sub)
+                else:
+                    # Re-merge sentences into target-sized chunks
+                    sub_parts: List[str] = []
+                    sub_len = 0
+                    for sent in sentences:
+                        if sub_len + len(sent) > self.target_size and sub_parts:
+                            chunks.append(" ".join(sub_parts))
+                            sub_parts = []
+                            sub_len = 0
+                        sub_parts.append(sent)
+                        sub_len += len(sent)
+                    if sub_parts:
+                        remainder = " ".join(sub_parts)
+                        if len(remainder) >= self.min_size:
+                            chunks.append(remainder)
+                        elif chunks:
+                            chunks[-1] = chunks[-1] + " " + remainder
+                        else:
+                            chunks.append(remainder)
+                continue
+
+            # Would adding this segment exceed target?
+            if current_len + seg_len > self.target_size and current_parts:
+                _flush()
+
+            current_parts.append(seg)
+            current_len += seg_len
+
+        _flush()
+        return chunks
 
 class DocumentProcessor:
     """Processes different document types into text"""
@@ -1080,9 +1181,10 @@ class SimpleRAGManager:
                         "metadata": metadata
                     })
                 
+                results = self._expand_with_adjacent_chunks(results)
                 logger.info(f"Returning {len(results)} results using TF-IDF only")
                 return results
-            
+
             # Stage 2: Re-rank with Sentence-BERT
             try:
                 logger.info("Performing SBERT re-ranking...")
@@ -1136,9 +1238,10 @@ class SimpleRAGManager:
                         "metadata": metadata
                     })
                 
+                results = self._expand_with_adjacent_chunks(results)
                 logger.info(f"Returning {len(results)} results using SBERT re-ranking")
                 return results
-                
+
             except Exception as e:
                 logger.error(f"Error during SBERT re-ranking: {str(e)}")
                 # Fallback to TF-IDF results if SBERT fails
@@ -1146,10 +1249,10 @@ class SimpleRAGManager:
                 for i, idx in enumerate(candidate_indices[:top_k_final]):
                     if idx >= len(self.chunks) or idx >= len(self.chunk_metadata):
                         continue
-                        
+
                     chunk = self.chunks[idx]
                     metadata = self.chunk_metadata[idx]
-                    
+
                     results.append({
                         "chunk_id": f"{metadata['document_id']}_chunk_{metadata['chunk_index']}",
                         "document_id": metadata['document_id'],
@@ -1160,13 +1263,58 @@ class SimpleRAGManager:
                         "method": "tfidf_fallback",
                         "metadata": metadata
                     })
-                
+
+                results = self._expand_with_adjacent_chunks(results)
                 logger.info(f"Returning {len(results)} results using TF-IDF fallback")
                 return results
                 
         except Exception as e:
             logger.error(f"Error retrieving documents: {str(e)}")
             return []
+
+    def _expand_with_adjacent_chunks(self, results: List[Dict[str, Any]], window: int = 1) -> List[Dict[str, Any]]:
+        """Expand each result by including adjacent chunks from the same document.
+
+        This gives the LLM more coherent context around each matched chunk.
+        Adjacent chunks are prepended/appended in document order and clearly
+        separated so the model can distinguish the core match from surrounding
+        context.
+
+        Args:
+            results: List of retrieval results (each with document_id, chunk_index, content)
+            window: Number of neighbouring chunks to include on each side (default 1)
+
+        Returns:
+            Updated results list with expanded content
+        """
+        if not results or window <= 0:
+            return results
+
+        # Build a lookup: (document_id, chunk_index) -> array index
+        doc_chunk_lookup: Dict[Tuple[str, int], int] = {}
+        for i, meta in enumerate(self.chunk_metadata):
+            doc_chunk_lookup[(meta["document_id"], meta["chunk_index"])] = i
+
+        expanded = []
+        for result in results:
+            doc_id = result["document_id"]
+            center_idx = result["chunk_index"]
+
+            parts = []
+            for offset in range(-window, window + 1):
+                neighbour_idx = center_idx + offset
+                key = (doc_id, neighbour_idx)
+                if key in doc_chunk_lookup:
+                    arr_idx = doc_chunk_lookup[key]
+                    if arr_idx < len(self.chunks) and self.chunks[arr_idx]:
+                        parts.append(self.chunks[arr_idx])
+
+            if parts:
+                result = dict(result)  # shallow copy
+                result["content"] = "\n\n".join(parts)
+            expanded.append(result)
+
+        return expanded
 
     def _load_chunk_content_for_retrieval(self):
         """Load actual chunk content for placeholder chunks"""
