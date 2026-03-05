@@ -363,7 +363,7 @@ class SimpleRAGManager:
         """Initialize SQLite database for document storage"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         # Create knowledge_bases table if it doesn't exist
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS knowledge_bases (
@@ -373,7 +373,7 @@ class SimpleRAGManager:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         ''')
-        
+
         # Create documents table if it doesn't exist (updated with knowledge_base_id)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS documents (
@@ -386,7 +386,7 @@ class SimpleRAGManager:
             FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases (id)
         )
         ''')
-        
+
         # Create vectors table
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS document_vectors (
@@ -394,6 +394,7 @@ class SimpleRAGManager:
             document_id TEXT NOT NULL,
             knowledge_base_id TEXT NOT NULL,
             chunk_index INTEGER NOT NULL,
+            chunk_content TEXT,
             tfidf_vector BLOB,
             sbert_vector BLOB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -401,7 +402,17 @@ class SimpleRAGManager:
             FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases (id)
         )
         ''')
-        
+
+        # Create table for persisted vectorizers (one per knowledge base)
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kb_vectorizers (
+            knowledge_base_id TEXT PRIMARY KEY,
+            vectorizer_blob BLOB NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (knowledge_base_id) REFERENCES knowledge_bases (id)
+        )
+        ''')
+
         # Insert default knowledge base if it doesn't exist
         cursor.execute("SELECT id FROM knowledge_bases WHERE id = 'default'")
         if not cursor.fetchone():
@@ -409,7 +420,14 @@ class SimpleRAGManager:
                 "INSERT INTO knowledge_bases (id, name, description) VALUES (?, ?, ?)",
                 ("default", "None", "Blank knowledge base.")
             )
-        
+
+        # Migration: add chunk_content column if missing (for existing databases)
+        try:
+            cursor.execute("SELECT chunk_content FROM document_vectors LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE document_vectors ADD COLUMN chunk_content TEXT")
+            logger.info("Migrated document_vectors table: added chunk_content column")
+
         conn.commit()
         conn.close()
     
@@ -545,30 +563,29 @@ class SimpleRAGManager:
                 del self.kb_states[self.knowledge_base]
                 logger.info(f"Cleared cache for knowledge base '{self.knowledge_base}' after document addition")
             
-            # After vectorizing the chunks
+            # After vectorizing the chunks — store ALL vectors (TF-IDF vocabulary changed)
             if self.chunk_vectors is not None:
-                # Get the starting index of the newly added chunks
-                start_idx = old_chunk_count
-                for i, chunk_idx in enumerate(range(start_idx, len(self.chunks))):
+                for chunk_idx in range(len(self.chunks)):
                     doc_id = self.chunk_metadata[chunk_idx]["document_id"]
                     chunk_i = self.chunk_metadata[chunk_idx]["chunk_index"]
-                    
-                    # Extract TF-IDF vector for this chunk
+
                     tfidf_vector = self.chunk_vectors[chunk_idx]
-                    
-                    # Extract SBERT vector if available
+
                     sbert_vector = None
                     if self.use_sbert and self.sbert_vectors is not None and len(self.sbert_vectors) > chunk_idx:
                         sbert_vector = self.sbert_vectors[chunk_idx]
-                    
-                    # Store vectors in database
+
                     self._store_vectors(
                         document_id=doc_id,
                         knowledge_base_id=self.knowledge_base,
-                        chunk_index=chunk_i, 
+                        chunk_index=chunk_i,
                         tfidf_vector=tfidf_vector,
-                        sbert_vector=sbert_vector
+                        sbert_vector=sbert_vector,
+                        chunk_content=self.chunks[chunk_idx]
                     )
+
+                # Persist the updated vectorizer (vocabulary changed with new doc)
+                self._store_vectorizer(self.knowledge_base)
             
             # Return document ID
             return doc_id
@@ -602,69 +619,62 @@ class SimpleRAGManager:
         return worker
         
     def _load_documents(self):
-        """Load document metadata and vectors from database for the current knowledge base"""
+        """Load document metadata, vectors, chunk content, and vectorizer from database"""
         try:
             conn = sqlite3.connect(self.db_path)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
-            
+
             # Clear the current state
             self.current_state["chunks"] = []
             self.current_state["chunk_metadata"] = []
             self.current_state["chunk_vectors"] = None
             self.current_state["sbert_vectors"] = None
-            
+
             # Get metadata for all documents in this knowledge base
             cursor.execute("SELECT id, filename, metadata FROM documents WHERE knowledge_base_id = ?", (self.knowledge_base,))
             doc_meta_rows = cursor.fetchall()
-            
+
             # If we don't have documents, return early
             if not doc_meta_rows:
                 logger.info(f"No documents found in knowledge base '{self.knowledge_base}'")
                 conn.close()
                 return
-                
-            # Get doc IDs for logging
+
             doc_ids = [row['id'] for row in doc_meta_rows]
             logger.info(f"Found {len(doc_ids)} documents in knowledge base '{self.knowledge_base}'")
-            
-            # Now get all document chunks from the vectors table
-            # This gives us the chunk structure without having to rechunk the documents
+
+            # Try to load chunk content + vectors from document_vectors table
             cursor.execute("""
-                SELECT document_id, chunk_index, id 
-                FROM document_vectors 
-                WHERE knowledge_base_id = ? 
+                SELECT document_id, chunk_index, id, chunk_content
+                FROM document_vectors
+                WHERE knowledge_base_id = ?
                 ORDER BY document_id, chunk_index
             """, (self.knowledge_base,))
             chunk_rows = cursor.fetchall()
-            
-            # Get the actual document content only if we have no vectors or need to recompute
+
+            # Check if we have vectors AND chunk content stored
+            has_stored_chunks = chunk_rows and all(row['chunk_content'] for row in chunk_rows)
+
             if not chunk_rows:
-                logger.info(f"No vector chunks found, will need to process documents from scratch")
-                
-                # Get full document content for processing
-                cursor.execute("SELECT id, filename, content, metadata FROM documents WHERE knowledge_base_id = ?", 
+                # No vectors at all — process documents from scratch
+                logger.info("No vector chunks found, processing documents from scratch")
+                cursor.execute("SELECT id, filename, content, metadata FROM documents WHERE knowledge_base_id = ?",
                               (self.knowledge_base,))
                 doc_rows = cursor.fetchall()
                 conn.close()
-                
-                # Process documents to create chunks
+
                 for doc_data in doc_rows:
                     try:
                         doc_dict = dict(doc_data)
                         metadata = json.loads(doc_data['metadata'] or '{}')
-                        
                         document = Document(
                             doc_id=doc_dict['id'],
                             filename=doc_dict['filename'],
                             content=doc_dict['content'],
                             metadata=metadata
                         )
-                        
-                        # Chunk the document
                         chunked_doc = self.chunker.chunk_document(document)
-                        
-                        # Add chunks to our collection
                         for i, chunk in enumerate(chunked_doc.chunks):
                             self.current_state["chunks"].append(chunk)
                             chunk_meta = {
@@ -676,18 +686,13 @@ class SimpleRAGManager:
                             }
                             chunk_meta.update(document.metadata)
                             self.current_state["chunk_metadata"].append(chunk_meta)
-                            
                     except Exception as e:
                         logger.error(f"Error processing document {doc_data['id']}: {str(e)}")
-                
-                # Vectorize all chunks if we have any
+
                 if self.current_state["chunks"]:
-                    # First-stage: TF-IDF vectorization
                     self.current_state["chunk_vectors"] = self.current_state["vectorizer"].fit_transform(
                         self.current_state["chunks"]
                     )
-                    
-                    # Second-stage: Sentence-BERT vectorization (if enabled)
                     if self.use_sbert and self.sbert_model is not None:
                         try:
                             self.current_state["sbert_vectors"] = self._compute_sbert_embeddings(
@@ -697,74 +702,142 @@ class SimpleRAGManager:
                         except Exception as e:
                             logger.error(f"Error computing SBERT embeddings: {str(e)}")
                             self.use_sbert = False
-                    
-                    # Save the vectors to the database for future use
                     self._store_all_vectors()
-                    
                     logger.info(f"Processed and vectorized {len(self.current_state['chunks'])} chunks from {len(doc_rows)} documents")
-                
-            else:
-                # We have vector records in the database
-                # Create a document lookup dictionary for faster access
+
+            elif has_stored_chunks:
+                # We have vectors AND chunk content in DB — fast path, no recomputation needed
                 doc_lookup = {row['id']: dict(row) for row in doc_meta_rows}
-                
-                # Build metadata for each chunk based on the vector records
-                chunk_ids = []
+                loaded_chunks = []
+
                 for chunk_row in chunk_rows:
                     doc_id = chunk_row['document_id']
                     chunk_index = chunk_row['chunk_index']
-                    chunk_id = chunk_row['id']
-                    chunk_ids.append(chunk_id)
-                    
+                    loaded_chunks.append(chunk_row['chunk_content'])
+
                     if doc_id in doc_lookup:
                         doc_meta = doc_lookup[doc_id]
                         try:
                             metadata = json.loads(doc_meta['metadata'] or '{}')
                         except (json.JSONDecodeError, TypeError):
                             metadata = {}
-                        
-                        # Add to chunk metadata
                         chunk_meta = {
                             "document_id": doc_id,
                             "filename": doc_meta['filename'],
                             "chunk_index": chunk_index,
-                            "chunk_id": chunk_id,
+                            "chunk_id": chunk_row['id'],
                             "knowledge_base_id": self.knowledge_base
                         }
                         chunk_meta.update(metadata)
                         self.current_state["chunk_metadata"].append(chunk_meta)
-                
-                # Close connection after getting metadata
+
+                self.current_state["chunks"] = loaded_chunks
                 conn.close()
-                
-                logger.info(f"Found {len(chunk_ids)} chunk records in the database")
-                
-                # Now load the actual vectors
+
+                logger.info(f"Loaded {len(loaded_chunks)} chunks with content from database")
+
+                # Load the persisted vectorizer
+                saved_vectorizer = self._load_vectorizer(self.knowledge_base)
+                if saved_vectorizer is not None:
+                    self.current_state["vectorizer"] = saved_vectorizer
+                    logger.info("Using persisted TF-IDF vectorizer — no recomputation needed")
+                else:
+                    # Vectorizer missing, re-fit from chunk content (still fast, no SBERT recompute)
+                    logger.info("Vectorizer not persisted, re-fitting TF-IDF from stored chunks")
+                    self.current_state["vectorizer"] = TfidfVectorizer()
+
+                # Load vectors from database
                 try:
-                    # Load vectors from database
                     tfidf_vectors, sbert_vectors, vector_mapping = self._load_vectors(self.knowledge_base)
-                    
-                    # If we have vectors, use them
                     if tfidf_vectors is not None:
-                        self.current_state["chunk_vectors"] = tfidf_vectors
-                        logger.info(f"Loaded TF-IDF vectors - shape: {tfidf_vectors.shape}")
-                        
+                        # If we have a persisted vectorizer, TF-IDF vectors are usable directly
+                        if saved_vectorizer is not None:
+                            self.current_state["chunk_vectors"] = tfidf_vectors
+                            logger.info(f"Loaded TF-IDF vectors from DB — shape: {tfidf_vectors.shape}")
+                        else:
+                            # Vectorizer was re-created, so DB TF-IDF vectors have wrong vocabulary
+                            # Re-fit and re-transform (but SBERT vectors are still valid)
+                            self.current_state["chunk_vectors"] = self.current_state["vectorizer"].fit_transform(
+                                self.current_state["chunks"]
+                            )
+                            logger.info("Re-computed TF-IDF vectors (vectorizer was missing)")
+                            self._store_vectorizer(self.knowledge_base)
+
                         if sbert_vectors is not None:
                             self.current_state["sbert_vectors"] = sbert_vectors
-                            logger.info(f"Loaded SBERT vectors - shape: {sbert_vectors.shape}")
-                    
-                    # For retrieval, we need the actual chunk content too
-                    # But we can load just a placeholder if the vectors are loaded successfully
-                    # This will be replaced on demand in retrieve_relevant
-                    # This saves memory and processing time
-                    placeholder_chunks = [""] * len(self.current_state["chunk_metadata"])
-                    self.current_state["chunks"] = placeholder_chunks
-                    
+                            logger.info(f"Loaded SBERT vectors from DB — shape: {sbert_vectors.shape}")
+                    else:
+                        # Vectors failed to load, recompute everything
+                        self.current_state["chunk_vectors"] = self.current_state["vectorizer"].fit_transform(
+                            self.current_state["chunks"]
+                        )
+                        if self.use_sbert and self.sbert_model is not None:
+                            self.current_state["sbert_vectors"] = self._compute_sbert_embeddings(
+                                self.current_state["chunks"]
+                            )
+                        self._store_all_vectors()
+                        logger.info("Recomputed all vectors (DB load failed)")
                 except Exception as e:
                     logger.error(f"Error loading vectors from database: {str(e)}")
-                    # Don't try to recover - just return with no vectors
                     return
-                    
+
+            else:
+                # We have vector records but no chunk_content (legacy/migrated DB)
+                # Must re-chunk from document content, but can reuse SBERT vectors
+                logger.info("Vector records found without chunk content — re-chunking from documents")
+                doc_lookup = {row['id']: dict(row) for row in doc_meta_rows}
+
+                for chunk_row in chunk_rows:
+                    doc_id = chunk_row['document_id']
+                    chunk_index = chunk_row['chunk_index']
+                    if doc_id in doc_lookup:
+                        doc_meta = doc_lookup[doc_id]
+                        try:
+                            metadata = json.loads(doc_meta['metadata'] or '{}')
+                        except (json.JSONDecodeError, TypeError):
+                            metadata = {}
+                        chunk_meta = {
+                            "document_id": doc_id,
+                            "filename": doc_meta['filename'],
+                            "chunk_index": chunk_index,
+                            "chunk_id": chunk_row['id'],
+                            "knowledge_base_id": self.knowledge_base
+                        }
+                        chunk_meta.update(metadata)
+                        self.current_state["chunk_metadata"].append(chunk_meta)
+
+                conn.close()
+
+                # Load chunk content by re-chunking documents
+                loaded_chunks = self._load_chunk_content_for_retrieval()
+                if loaded_chunks:
+                    self.current_state["chunks"] = loaded_chunks
+                else:
+                    self.current_state["chunks"] = [""] * len(self.current_state["chunk_metadata"])
+
+                # Recompute TF-IDF (vocabulary-dependent, can't reuse)
+                if self.current_state["chunks"] and any(c for c in self.current_state["chunks"]):
+                    self.current_state["chunk_vectors"] = self.current_state["vectorizer"].fit_transform(
+                        self.current_state["chunks"]
+                    )
+
+                # Load SBERT vectors from DB (these ARE reusable)
+                try:
+                    _, sbert_vectors, _ = self._load_vectors(self.knowledge_base)
+                    if sbert_vectors is not None:
+                        self.current_state["sbert_vectors"] = sbert_vectors
+                        logger.info(f"Reused SBERT vectors from DB — shape: {sbert_vectors.shape}")
+                    elif self.use_sbert and self.sbert_model is not None:
+                        self.current_state["sbert_vectors"] = self._compute_sbert_embeddings(
+                            self.current_state["chunks"]
+                        )
+                except Exception as e:
+                    logger.error(f"Error loading SBERT vectors: {str(e)}")
+
+                # Re-store everything with chunk content for future fast loads
+                self._store_all_vectors()
+                logger.info("Re-stored vectors with chunk content for future fast loading")
+
         except Exception as e:
             logger.error(f"Error in _load_documents: {str(e)}")
 
@@ -889,43 +962,54 @@ class SimpleRAGManager:
 
     def _store_all_vectors(self):
         """Store all vectors for the current knowledge base in the database"""
-        if not self.current_state["chunk_vectors"] or not self.current_state["chunk_metadata"]:
+        chunk_vectors = self.current_state["chunk_vectors"]
+        chunk_metadata = self.current_state["chunk_metadata"]
+        chunks = self.current_state["chunks"]
+
+        if chunk_vectors is None or not chunk_metadata:
             logger.warning("No vectors or metadata to store")
             return
-        
-        try:    
+
+        try:
             # Check if the number of vectors matches the number of chunks
-            vector_count = self.current_state["chunk_vectors"].shape[0]
-            metadata_count = len(self.current_state["chunk_metadata"])
-            
+            vector_count = chunk_vectors.shape[0]
+            metadata_count = len(chunk_metadata)
+
             if vector_count != metadata_count:
                 logger.error(f"Vector count ({vector_count}) does not match metadata count ({metadata_count})")
                 return
-                
-            for i, meta in enumerate(self.current_state["chunk_metadata"]):
+
+            for i, meta in enumerate(chunk_metadata):
                 try:
                     # Extract TF-IDF vector for this chunk
-                    tfidf_vector = self.current_state["chunk_vectors"][i]
-                    
+                    tfidf_vector = chunk_vectors[i]
+
                     # Extract SBERT vector if available
                     sbert_vector = None
-                    if (self.use_sbert and 
-                        self.current_state["sbert_vectors"] is not None and 
+                    if (self.use_sbert and
+                        self.current_state["sbert_vectors"] is not None and
                         i < len(self.current_state["sbert_vectors"])):
                         sbert_vector = self.current_state["sbert_vectors"][i]
-                    
+
+                    # Get chunk content text
+                    chunk_content = chunks[i] if i < len(chunks) else None
+
                     # Store vectors in database
                     self._store_vectors(
                         document_id=meta["document_id"],
                         knowledge_base_id=self.knowledge_base,
-                        chunk_index=meta["chunk_index"], 
+                        chunk_index=meta["chunk_index"],
                         tfidf_vector=tfidf_vector,
-                        sbert_vector=sbert_vector
+                        sbert_vector=sbert_vector,
+                        chunk_content=chunk_content
                     )
                 except Exception as e:
                     logger.error(f"Error storing vector for chunk {i}: {str(e)}")
-            
-            logger.info(f"Stored vectors for {len(self.current_state['chunk_metadata'])} chunks in knowledge base '{self.knowledge_base}'")
+
+            # Persist the fitted vectorizer alongside vectors
+            self._store_vectorizer(self.knowledge_base)
+
+            logger.info(f"Stored vectors for {len(chunk_metadata)} chunks in knowledge base '{self.knowledge_base}'")
         except Exception as e:
             logger.error(f"Error in _store_all_vectors: {str(e)}")
     
@@ -947,23 +1031,18 @@ class SimpleRAGManager:
                 logger.warning("No vectors available for retrieval")
                 return []
 
-            
-            # Check if chunks are placeholders (empty strings) and load content if needed
-            # Check if chunks are placeholders (empty strings) and load content for retrieval
+            # If chunks are still placeholders (legacy path), load content and refit
             if self.chunks and all(not chunk for chunk in self.chunks):
                 logger.info("Chunks are placeholders, loading content for retrieval...")
                 loaded_chunks = self._load_chunk_content_for_retrieval()
                 if loaded_chunks:
                     self.chunks = loaded_chunks
-                    logger.info(f"Loaded {len(loaded_chunks)} chunks for retrieval")
-                    # Fit the TF-IDF vectorizer on the loaded chunks.
-                    logger.info("Fitting TF-IDF vectorizer on loaded chunks")
-                    self.vectorizer.fit(self.chunks)
-                    # Update the TF-IDF vectors so that they match the new vocabulary.
-                    self.chunk_vectors = self.vectorizer.transform(self.chunks)
+                    self.vectorizer = TfidfVectorizer()
+                    self.chunk_vectors = self.vectorizer.fit_transform(self.chunks)
+                    # Store for future fast loads
+                    self._store_all_vectors()
+                    logger.info(f"Loaded and re-vectorized {len(loaded_chunks)} chunks")
 
-
-            
             # Make sure we have valid chunks
             if not self.chunks or len(self.chunks) == 0 or len(self.chunks) != len(self.chunk_metadata):
                 logger.warning(f"Chunk inconsistency: {len(self.chunks)} chunks vs {len(self.chunk_metadata)} metadata")
@@ -1259,27 +1338,70 @@ class SimpleRAGManager:
  
 
     # Add methods to store and retrieve vectors
-    def _store_vectors(self, document_id, knowledge_base_id, chunk_index, tfidf_vector, sbert_vector=None):
+    def _store_vectors(self, document_id, knowledge_base_id, chunk_index, tfidf_vector, sbert_vector=None, chunk_content=None):
         """Store document vectors in the database"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        
+
         vector_id = f"{document_id}_chunk_{chunk_index}"
-        
+
         # Serialize vectors
         tfidf_blob = pickle.dumps(tfidf_vector)
         sbert_blob = pickle.dumps(sbert_vector) if sbert_vector is not None else None
-        
+
         # Use REPLACE to handle updates
         cursor.execute(
-            """REPLACE INTO document_vectors 
-               (id, document_id, knowledge_base_id, chunk_index, tfidf_vector, sbert_vector)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (vector_id, document_id, knowledge_base_id, chunk_index, tfidf_blob, sbert_blob)
+            """REPLACE INTO document_vectors
+               (id, document_id, knowledge_base_id, chunk_index, chunk_content, tfidf_vector, sbert_vector)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (vector_id, document_id, knowledge_base_id, chunk_index, chunk_content, tfidf_blob, sbert_blob)
         )
-        
+
         conn.commit()
         conn.close()
+
+    def _store_vectorizer(self, knowledge_base_id):
+        """Persist the fitted TF-IDF vectorizer for a knowledge base"""
+        try:
+            vectorizer = self.current_state.get("vectorizer")
+            if vectorizer is None:
+                return
+            # Only store if the vectorizer has been fitted (has vocabulary)
+            if not hasattr(vectorizer, 'vocabulary_') or not vectorizer.vocabulary_:
+                return
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            blob = pickle.dumps(vectorizer)
+            cursor.execute(
+                """REPLACE INTO kb_vectorizers (knowledge_base_id, vectorizer_blob, updated_at)
+                   VALUES (?, ?, CURRENT_TIMESTAMP)""",
+                (knowledge_base_id, blob)
+            )
+            conn.commit()
+            conn.close()
+            logger.info(f"Persisted TF-IDF vectorizer for knowledge base '{knowledge_base_id}'")
+        except Exception as e:
+            logger.error(f"Error persisting vectorizer: {str(e)}")
+
+    def _load_vectorizer(self, knowledge_base_id):
+        """Load persisted TF-IDF vectorizer for a knowledge base"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT vectorizer_blob FROM kb_vectorizers WHERE knowledge_base_id = ?",
+                (knowledge_base_id,)
+            )
+            row = cursor.fetchone()
+            conn.close()
+            if row and row[0]:
+                vectorizer = pickle.loads(row[0])
+                logger.info(f"Loaded persisted TF-IDF vectorizer for knowledge base '{knowledge_base_id}'")
+                return vectorizer
+            return None
+        except Exception as e:
+            logger.error(f"Error loading vectorizer: {str(e)}")
+            return None
         
     def _load_vectors(self, knowledge_base_id):
         """Load vectors for a knowledge base from the database"""
@@ -1491,17 +1613,23 @@ class SimpleRAGManager:
                 logger.warning("Cannot delete the default knowledge base")
                 return False
                 
-            # Delete from SQLite - first documents, then knowledge base
+            # Delete from SQLite - vectors, vectorizer, documents, then knowledge base
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
+            # Delete vectors for this knowledge base
+            cursor.execute("DELETE FROM document_vectors WHERE knowledge_base_id = ?", (kb_id,))
+
+            # Delete persisted vectorizer
+            cursor.execute("DELETE FROM kb_vectorizers WHERE knowledge_base_id = ?", (kb_id,))
+
             # Delete all documents in this knowledge base
             cursor.execute("DELETE FROM documents WHERE knowledge_base_id = ?", (kb_id,))
-            
+
             # Delete the knowledge base itself
             cursor.execute("DELETE FROM knowledge_bases WHERE id = ?", (kb_id,))
             deleted = cursor.rowcount > 0
-            
+
             conn.commit()
             conn.close()
             
