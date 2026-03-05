@@ -1,21 +1,22 @@
 # PyChat
 
-A versatile desktop application that lets you interact with multiple AI providers (OpenAI, Anthropic Claude, Google Gemini, and Ollama) through a unified interface. This PyQt5-based tool offers a seamless experience for using various large language models across different providers. Query your own documents with RAG for custom knowledge.
+A versatile desktop application that lets you interact with multiple AI providers (OpenAI, Anthropic Claude, Google Gemini, and Ollama) through a unified interface. This PyQt5-based tool offers a seamless experience for using various large language models across different providers. Query your own documents with RAG for custom knowledge, with enterprise-grade security and compliance features built in.
 
 ![PyChat Interface](https://github.com/Magnetron85/PyChat/raw/rag2/screenshot.png)
 
 ## Features
 
 ### Multiple AI Provider Support
-- **OpenAI** (GPT-4, GPT-3.5, etc.)
-- **Anthropic Claude** (Claude 3 Opus, Sonnet, Haiku, etc.)
+- **OpenAI** (GPT-4, GPT-4o, GPT-3.5, etc.)
+- **Anthropic Claude** (Claude 4, Claude 3.5, Claude 3 Opus/Sonnet/Haiku, etc.)
 - **Ollama** (for local open-source models)
-- **Google Gemini** (Gemini Pro, Gemini Ultra, Gemini Flash, etc.)
+- **Google Gemini** (Gemini 2.0 Flash, Gemini 1.5 Pro/Flash, etc.)
 
 ### Rich Text Interface
 - Syntax highlighting for code blocks
 - Streaming support for real-time responses
 - Copy code button for easy code reuse
+- Response regeneration for quick iteration
 
 ### Advanced Features
 - Preprompt system for reusable context templates
@@ -27,35 +28,46 @@ A versatile desktop application that lets you interact with multiple AI provider
 - Support for OpenAI compatibility mode with Ollama
 - Multi-provider usage in a single interface
 - RAG (Retrieval-Augmented Generation) capabilities for document Q&A
+- Token usage tracking and cost estimation per conversation
+- Keyboard shortcuts (Ctrl+Enter to send, Escape to clear input)
+
+### Security & Compliance
+- **AES-256 encryption at rest** for API keys and sensitive data using Fernet (cryptography library)
+- **HIPAA/SOC2-aligned audit logging** with timestamped event tracking
+- **PII/PHI detection and sanitization** (SSN, phone, email, credit card, date of birth patterns)
+- **Compliance dashboard** accessible from the Tools menu
+- **Audit trail** with exportable logs for compliance review
+- Encryption keys stored with restrictive file permissions (0600)
+
+### Token Usage & Cost Tracking
+- Automatic token estimation per message exchange
+- Per-thread and per-provider usage statistics
+- Cost estimation for all major models (OpenAI, Anthropic, Gemini)
+- Local Ollama models tracked as zero-cost
+- Session summary with today's usage breakdown
+- Accessible from Tools > Token Usage
 
 ## Important User Information
 
 ### Data Storage & Privacy
 - **Local Storage**: All conversations are stored locally in an SQLite database (`chat_history.db`)
-- **API Keys**: Your API keys are stored locally using Qt's settings mechanism and are not transmitted beyond the respective API services
-- **Logging**: The application logs activities to `ai_chat_debug.log`, which may include message content for debugging purposes
+- **Encrypted API Keys**: API keys are encrypted at rest using AES-256 encryption and stored at `~/.pychat/`
+- **Audit Logging**: Security-relevant events are logged to a local SQLite audit trail for compliance
+- **Application Logging**: The application logs activities to `ai_chat_debug.log` for debugging purposes
 - **No Data Sharing**: PyChat does not send your conversations to any servers except the AI provider APIs you configure
 
 ### Security Considerations
-- **Credentials**: API keys are stored locally in Qt's settings storage; ensure your computer is secure
+- **Credentials**: API keys are encrypted with AES-256 before storage; encryption keys are protected with restrictive file permissions
 - **API Usage**: Your API usage with OpenAI, Anthropic, and Google will incur costs according to those services' pricing
 - **Network Access**: The application requires internet access to communicate with remote APIs
 - **Local Models**: Using Ollama allows you to run models locally with no data sent to external services
+- **PII Protection**: Built-in PII/PHI detection warns about sensitive data patterns before transmission
 
 ## Installation
 
 ### Prerequisites
-- Python 3.6+
-- Required packages:
-  - PyQt5
-  - Requests
-  - qtconsole (for the Jupyter console integration)
-  - fuzzywuzzy (for search functionality)
-  - google-genai (for Gemini integration)
-  - chromadb (for RAG capability)
-  - langchain (for document processing and RAG pipeline)
-  - langchain-community (for vectorstore integrations)
-  - sentence-transformers (for text embeddings)
+- Python 3.8+
+- Required packages (see below)
 
 ### Steps
 1. Clone the repository:
@@ -65,13 +77,42 @@ A versatile desktop application that lets you interact with multiple AI provider
 
 2. Install the required dependencies:
    ```
-   pip install PyQt5 requests qtconsole python-Levenshtein exceptions fuzzywuzzy google-genai markdown langchain sentence-transformers pymupdf numpy torch python-docx scikit-learn scipy
+   pip install PyQt5 requests qtconsole python-Levenshtein fuzzywuzzy google-genai markdown langchain sentence-transformers pymupdf numpy torch python-docx scikit-learn scipy cryptography python-pptx openpyxl pytesseract
    ```
 
-3. Run the application:
+3. For image OCR support (optional), install Tesseract:
+   ```
+   # Ubuntu/Debian
+   sudo apt install tesseract-ocr
+
+   # macOS
+   brew install tesseract
+
+   # Windows: download from https://github.com/UB-Mannheim/tesseract/wiki
+   ```
+
+4. Run the application:
    ```
    python pychat.py
    ```
+
+### Dependency Overview
+
+| Package | Purpose |
+|---------|---------|
+| `PyQt5` | Desktop GUI framework |
+| `requests` | HTTP client for API calls |
+| `cryptography` | AES-256 encryption for API keys and sensitive data |
+| `sentence-transformers` | Text embeddings for RAG |
+| `scikit-learn` | TF-IDF retrieval for RAG |
+| `pymupdf` | PDF text extraction and image OCR |
+| `python-docx` | Word document processing |
+| `python-pptx` | PowerPoint presentation processing |
+| `openpyxl` | Excel spreadsheet processing |
+| `pytesseract` | OCR for images (requires Tesseract) |
+| `google-genai` | Google Gemini API integration |
+| `fuzzywuzzy` | Fuzzy search for threads |
+| `torch` | Backend for sentence-transformers |
 
 ## Setting Up AI Providers
 
@@ -99,8 +140,6 @@ A versatile desktop application that lets you interact with multiple AI provider
 3. Enter your Google Gemini API key (get it from [Google AI Studio](https://aistudio.google.com/))
 4. Click "Save Settings"
 
-PyChat supports various Gemini models including Gemini Pro, Gemini Ultra, and Gemini Flash. The Gemini integration gives you access to Google's powerful multimodal AI capabilities.
-
 ## Usage Guide
 
 ### Using Preprompts
@@ -119,6 +158,14 @@ You can set default preprompts or configure the application to always use the la
 2. Type your message in the input area
 3. Click "Send" or press Ctrl+Enter to submit
 4. View the AI's response in the chat area
+5. Use the "Regenerate" button to get an alternative response
+
+### Keyboard Shortcuts
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Enter | Send message |
+| Escape | Clear input field |
+| Ctrl+Shift+C | Copy last response |
 
 ### Conversation Management
 - Conversations are organized into threads that are stored locally
@@ -135,6 +182,50 @@ You can set default preprompts or configure the application to always use the la
 - For Ollama, you need to install models before they appear in the application
 - For Google Gemini, OpenAI, and Anthropic, available models are loaded automatically when you have a valid API key
 
+### Tools Menu
+- **Token Usage**: View per-thread and per-provider token consumption and estimated costs
+- **System Health**: Check system status including database size, encryption status, and document counts
+- **Compliance Status**: Review SOC2/HIPAA compliance posture (encryption, audit logging, PII detection)
+- **Audit Log**: Browse and review the security audit trail
+
+## Retrieval-Augmented Generation (RAG)
+
+PyChat includes RAG capabilities, allowing you to chat with your documents and get more accurate, context-aware responses from AI models.
+
+### What is RAG?
+Retrieval-Augmented Generation is a technique that enhances AI responses by retrieving relevant information from a document database before generating an answer. This allows the AI to provide more accurate responses based on your specific documents.
+
+### Supported File Types
+| Format | Extensions | Processing |
+|--------|-----------|------------|
+| PDF | `.pdf` | Text extraction via PyMuPDF |
+| Word | `.docx` | Paragraph and table extraction via python-docx |
+| PowerPoint | `.pptx` | Slide-by-slide extraction including tables via python-pptx |
+| Excel | `.xlsx`, `.xls` | Sheet-aware structured extraction via openpyxl |
+| CSV | `.csv` | Structured row/column parsing |
+| Images | `.jpg`, `.jpeg`, `.png`, `.bmp`, `.tiff` | OCR via PyMuPDF + pytesseract fallback |
+| Plain Text | `.txt`, `.md`, `.log`, etc. | Direct text reading |
+
+### RAG Architecture
+PyChat uses a two-stage retrieval pipeline:
+1. **TF-IDF** for fast initial candidate retrieval
+2. **Sentence-BERT** for semantic re-ranking of top candidates
+
+This approach balances speed with retrieval quality.
+
+### How to Use RAG
+1. Go to the "Knowledge" tab
+2. Upload your documents using the "Add Documents" button. You can keep related documents in separate knowledge domains.
+3. The system will process and embed your documents automatically
+4. Switch to the chat interface and enable the "Use RAG" toggle
+5. Select the correct domain in your Chat window. Ask questions about your documents, and PyChat will retrieve relevant information to enhance AI responses
+
+### Available Document Operations
+- Add new documents to the knowledge base
+- View all uploaded documents
+- Delete documents from the database
+- Search within your document collection
+
 ## Model Capabilities
 
 Different AI providers offer unique capabilities through PyChat:
@@ -144,33 +235,6 @@ Different AI providers offer unique capabilities through PyChat:
 - **Ollama**: Run open-source models locally for privacy and no API costs
 - **Google Gemini**: Excellent multimodal capabilities with text generation
 
-## Retrieval-Augmented Generation (RAG)
-
-PyChat now includes RAG capabilities, allowing you to chat with your documents and get more accurate, context-aware responses from AI models.
-
-### What is RAG?
-Retrieval-Augmented Generation is a technique that enhances AI responses by retrieving relevant information from a document database before generating an answer. This allows the AI to provide more accurate responses based on your specific documents.
-
-### Features
-- Upload and process various document formats (PDF, DOCX, TXT)
-- Automatically chunk and embed documents using sentence-transformers
-- Store document embeddings in a local ChromaDB vector database
-- Query your documents using natural language
-- Get context-enhanced responses from any supported AI model
-
-### How to Use RAG
-1. Go to the "Knowledge" tab
-2. Upload your documents using the "Add Documents" button. Can keep related documents in seperate knowledge domains.
-3. The system will process and embed your documents automatically
-4. Switch to the chat interface and enable the "Use RAG" toggle
-5. Select the correct domain in your Chat window. Ask questions about your documents, and PyChat will retrieve relevant information to enhance AI responses
-
-### Available Document Operations
-- Add new documents to the vector database
-- View all uploaded documents
-- Delete documents from the database
-- Search within your document collection
-
 ## Troubleshooting
 
 - **Models not loading**: Check your API keys in the Settings tab and ensure they're valid
@@ -178,6 +242,8 @@ Retrieval-Augmented Generation is a technique that enhances AI responses by retr
 - **Error messages in responses**: Check the application log file (`ai_chat_debug.log`) for details
 - **API Key Issues**: If you receive authorization errors, verify your API keys are correct and have not expired
 - **Database Issues**: If experiencing data loss, check file permissions for the `chat_history.db` file
+- **OCR not working**: Ensure Tesseract is installed on your system (`tesseract --version` to verify)
+- **Encryption key errors**: Check that `~/.pychat/` directory exists and has proper permissions
 
 ### Data Cleanup
 If you want to remove all stored data:
@@ -185,6 +251,7 @@ If you want to remove all stored data:
 - Delete the `chat_history.db` file to remove all conversations
 - API keys can be cleared through the Settings tab for each provider
 - Delete the `ai_chat_debug.log` file to remove all debug logs
+- Delete `~/.pychat/` to remove encryption keys and audit logs
 
 ## Screenshots
 
