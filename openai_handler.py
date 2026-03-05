@@ -25,15 +25,7 @@ class OpenAIRequestWorker(QThread):
                 "Authorization": f"Bearer {self.api_key}"
             }
             
-            # NEW: Handle different formats based on conversation mode
-            if self.use_conversation and isinstance(self.prompt, list):
-                # Using conversation history - prompt is already a list of messages
-                data = {
-                    "model": self.model,
-                    "messages": self.prompt,
-                    "stream": self.stream
-                }
-            # Build request data for OpenAI
+            # Handle different formats based on conversation mode
             if self.use_conversation and isinstance(self.prompt, list):
                 # Using conversation history - prompt is already a list of messages
                 data = {
@@ -207,7 +199,7 @@ class OpenAIModelsWorker(QThread):
                     error_json = response.json()
                     if "error" in error_json:
                         error_msg += f" - {error_json['error']['message']}"
-                except:
+                except (ValueError, KeyError, TypeError):
                     pass
                 
                 logging.error(error_msg)

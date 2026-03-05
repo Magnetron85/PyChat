@@ -421,7 +421,14 @@ class RAGPanel(QWidget):
             self,
             "Select Document(s)",
             "",
-            "All Supported Files (*.txt *.md *.pdf *.docx);;Text Documents (*.txt *.md);;Word Documents (*.docx);;PDF Documents (*.pdf);;All Files (*)"
+            "All Supported Files (*.txt *.md *.pdf *.docx *.pptx *.xlsx *.xls *.csv *.jpg *.jpeg *.png);;"
+            "Text Documents (*.txt *.md *.csv);;"
+            "Word Documents (*.docx);;"
+            "PDF Documents (*.pdf);;"
+            "PowerPoint (*.pptx);;"
+            "Excel (*.xlsx *.xls);;"
+            "Images (*.jpg *.jpeg *.png);;"
+            "All Files (*)"
         )
         
         if not file_paths:
@@ -676,21 +683,20 @@ class RAGPanel(QWidget):
                 try:
                     attr.terminate()
                     attr.wait()
-                except:
-                    pass
-    
+                except (RuntimeError, Exception) as e:
+                    logger.warning(f"Error terminating worker {attr_name}: {e}")
+
     def __del__(self):
         """Cleanup when object is destroyed"""
         try:
-            # Ensure all worker threads are stopped
             for attr_name in dir(self):
                 try:
                     attr = getattr(self, attr_name)
                     if isinstance(attr, QThread) and attr.isRunning():
                         logger.info(f"Terminating thread in __del__: {attr_name}")
                         attr.terminate()
-                        attr.wait(100)  # Wait up to 100ms
-                except:
+                        attr.wait(100)
+                except (RuntimeError, AttributeError):
                     pass
-        except:
-            pass  # Ignore any errors during destruction
+        except Exception:
+            pass

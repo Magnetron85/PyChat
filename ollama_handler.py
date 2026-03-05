@@ -61,7 +61,7 @@ class OllamaRequestWorker(QThread):
                                 error_json = response.json()
                                 if "error" in error_json:
                                     error_msg += f" - {error_json['error']}"
-                            except:
+                            except (ValueError, KeyError, TypeError):
                                 pass
                             self.finished.emit(error_msg, False)
                             return
@@ -117,7 +117,7 @@ class OllamaRequestWorker(QThread):
                             error_json = response.json()
                             if "error" in error_json:
                                 error_msg += f" - {error_json['error']}"
-                        except:
+                        except (ValueError, KeyError, TypeError):
                             pass
                         self.finished.emit(error_msg, False)
                         

@@ -123,7 +123,7 @@ class ThreadListWidget(QWidget):
                 from datetime import datetime
                 dt = datetime.fromisoformat(last_updated)
                 formatted_time = dt.strftime("%m/%d/%Y %I:%M %p")
-            except:
+            except (ValueError, TypeError):
                 formatted_time = last_updated
             
             # Create display text
@@ -677,7 +677,7 @@ class SearchResultsWidget(QWidget):
                     from datetime import datetime
                     dt = datetime.fromisoformat(timestamp)
                     timestamp_display = dt.strftime("%m/%d/%Y %I:%M %p")
-                except:
+                except (ValueError, TypeError):
                     timestamp_display = timestamp
                 
                 # Create display text with visible highlighting

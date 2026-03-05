@@ -63,7 +63,7 @@ class AnthropicRequestWorker(QThread):
                                 error_json = response.json()
                                 if "error" in error_json:
                                     error_msg += f" - {error_json['error']['message']}"
-                            except:
+                            except (ValueError, KeyError, TypeError):
                                 pass
                             self.finished.emit(error_msg, False)
                             return
@@ -138,13 +138,13 @@ class AnthropicRequestWorker(QThread):
                             error_json = response.json()
                             if "error" in error_json:
                                 error_msg += f" - {error_json['error']['message']}"
-                        except:
+                        except (ValueError, KeyError, TypeError):
                             pass
                         self.finished.emit(error_msg, False)
-                        
+
                 except requests.RequestException as e:
                     self.finished.emit(f"Network error: {str(e)}", False)
-                    
+
         except Exception as e:
             logging.error(f"Error in Anthropic request: {str(e)}")
             self.finished.emit(f"Error: {str(e)}", False)
@@ -198,7 +198,7 @@ class AnthropicModelsWorker(QThread):
                     error_json = response.json()
                     if "error" in error_json:
                         error_msg += f" - {error_json['error']['message']}"
-                except:
+                except (ValueError, KeyError, TypeError):
                     pass
                 logging.error(error_msg)
                 self.finished.emit([], False)

@@ -49,7 +49,7 @@ class PrepromptManager:
                 # Initialize usage counts to 0
                 for name in self.preprompts:
                     self.usage_count[name] = 0
-            except:
+            except (json.JSONDecodeError, TypeError):
                 self.preprompts = {}
         
         # Load default preprompt settings
@@ -393,10 +393,11 @@ class PrepromptUI:
                 self.use_last_checkbox.setChecked(False)
             
             self.update_default_label()
-            QMessageBox.information(
-                self.parent, "Default Preprompt", 
-                f"Default preprompt {'cleared' if name == 'None' or name is None else f'set to \'{name}\''}"
-            )
+            if name == 'None' or name is None:
+                msg = "Default preprompt cleared"
+            else:
+                msg = f"Default preprompt set to '{name}'"
+            QMessageBox.information(self.parent, "Default Preprompt", msg)
     
     def create_new_preprompt(self):
         """Create a new preprompt"""

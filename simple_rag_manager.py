@@ -135,27 +135,140 @@ class DocumentProcessor:
                 logger.error(f"Error processing PDF file: {str(e)}")
                 return "", {"error": f"PDF processing error: {str(e)}"}
         
+        # Handle PowerPoint files
+        if file_ext == '.pptx':
+            try:
+                from pptx import Presentation
+                prs = Presentation(file_path)
+                text_parts = []
+                slide_count = 0
+                for slide in prs.slides:
+                    slide_count += 1
+                    slide_text = f"--- Slide {slide_count} ---\n"
+                    for shape in slide.shapes:
+                        if shape.has_text_frame:
+                            for paragraph in shape.text_frame.paragraphs:
+                                slide_text += paragraph.text + "\n"
+                        if shape.has_table:
+                            for row in shape.table.rows:
+                                row_text = " | ".join(cell.text for cell in row.cells)
+                                slide_text += row_text + "\n"
+                    text_parts.append(slide_text)
+                text = "\n".join(text_parts)
+                metadata = {
+                    "format": "pptx",
+                    "size_bytes": os.path.getsize(file_path),
+                    "slide_count": slide_count,
+                    "line_count": text.count('\n') + 1
+                }
+                return text, metadata
+            except ImportError:
+                logger.error("python-pptx not installed. Install with: pip install python-pptx")
+                return "", {"error": "python-pptx not installed. Run: pip install python-pptx"}
+            except Exception as e:
+                logger.error(f"Error processing PPTX file: {str(e)}")
+                return "", {"error": f"PPTX processing error: {str(e)}"}
+
+        # Handle Excel files
+        if file_ext in ('.xlsx', '.xls'):
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+                text_parts = []
+                for sheet_name in wb.sheetnames:
+                    ws = wb[sheet_name]
+                    text_parts.append(f"--- Sheet: {sheet_name} ---")
+                    for row in ws.iter_rows(values_only=True):
+                        row_text = " | ".join(str(cell) if cell is not None else "" for cell in row)
+                        if row_text.strip():
+                            text_parts.append(row_text)
+                wb.close()
+                text = "\n".join(text_parts)
+                metadata = {
+                    "format": file_ext.lstrip('.'),
+                    "size_bytes": os.path.getsize(file_path),
+                    "sheet_count": len(wb.sheetnames),
+                    "line_count": text.count('\n') + 1
+                }
+                return text, metadata
+            except ImportError:
+                logger.error("openpyxl not installed. Install with: pip install openpyxl")
+                return "", {"error": "openpyxl not installed. Run: pip install openpyxl"}
+            except Exception as e:
+                logger.error(f"Error processing Excel file: {str(e)}")
+                return "", {"error": f"Excel processing error: {str(e)}"}
+
+        # Handle image files with OCR
+        if file_ext in ('.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif'):
+            try:
+                # Try PyMuPDF first for image text extraction
+                doc = pymupdf.open(file_path)
+                page = doc[0]
+                text = page.get_text()
+                doc.close()
+
+                if not text.strip():
+                    # Fallback: try pytesseract OCR
+                    try:
+                        from PIL import Image
+                        import pytesseract
+                        img = Image.open(file_path)
+                        text = pytesseract.image_to_string(img)
+                    except ImportError:
+                        text = f"[Image file: {os.path.basename(file_path)} - OCR not available. Install Pillow and pytesseract for image text extraction.]"
+                    except Exception as ocr_err:
+                        text = f"[Image file: {os.path.basename(file_path)} - OCR failed: {str(ocr_err)}]"
+
+                metadata = {
+                    "format": file_ext.lstrip('.'),
+                    "size_bytes": os.path.getsize(file_path),
+                    "type": "image",
+                    "line_count": text.count('\n') + 1
+                }
+                return text, metadata
+            except Exception as e:
+                logger.error(f"Error processing image file: {str(e)}")
+                return "", {"error": f"Image processing error: {str(e)}"}
+
+        # Handle CSV files
+        if file_ext == '.csv':
+            try:
+                import csv
+                text_parts = []
+                with open(file_path, 'r', encoding='utf-8', newline='') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        text_parts.append(" | ".join(row))
+                text = "\n".join(text_parts)
+                metadata = {
+                    "format": "csv",
+                    "size_bytes": os.path.getsize(file_path),
+                    "line_count": len(text_parts)
+                }
+                return text, metadata
+            except Exception as e:
+                logger.error(f"Error processing CSV file: {str(e)}")
+                return "", {"error": f"CSV processing error: {str(e)}"}
+
         # For text files and other formats
         try:
             with open(file_path, 'r', encoding='utf-8') as file:
                 text = file.read()
-            
-            # Basic metadata for text files
+
             metadata = {
-                "format": os.path.splitext(file_path)[1].lower(),
+                "format": file_ext.lstrip('.') if file_ext else "txt",
                 "size_bytes": os.path.getsize(file_path),
                 "line_count": text.count('\n') + 1
             }
-            
+
             return text, metadata
-            
+
         except UnicodeDecodeError:
-            # Try with different encodings
             try:
                 with open(file_path, 'r', encoding='latin-1') as file:
                     text = file.read()
                 metadata = {
-                    "format": os.path.splitext(file_path)[1].lower(),
+                    "format": file_ext.lstrip('.') if file_ext else "txt",
                     "size_bytes": os.path.getsize(file_path),
                     "line_count": text.count('\n') + 1,
                     "encoding": "latin-1"
@@ -607,7 +720,7 @@ class SimpleRAGManager:
                         doc_meta = doc_lookup[doc_id]
                         try:
                             metadata = json.loads(doc_meta['metadata'] or '{}')
-                        except:
+                        except (json.JSONDecodeError, TypeError):
                             metadata = {}
                         
                         # Add to chunk metadata
@@ -1068,7 +1181,7 @@ class SimpleRAGManager:
             # Parse metadata from JSON
             try:
                 metadata = json.loads(doc_dict["metadata"] or "{}")
-            except:
+            except (json.JSONDecodeError, TypeError):
                 metadata = {}
             
             return Document(
@@ -1099,7 +1212,7 @@ class SimpleRAGManager:
             row_dict = dict(row)
             try:
                 metadata = json.loads(row_dict["metadata"] or "{}")
-            except:
+            except (json.JSONDecodeError, TypeError):
                 metadata = {}
             
             documents.append({
@@ -1462,9 +1575,9 @@ class SimpleRAGManager:
                 try:
                     attr.terminate()
                     attr.wait()
-                except:
-                    pass
-            
+                except (RuntimeError, Exception) as e:
+                    logger.warning(f"Error terminating worker: {e}")
+
     # Property getters and setters for the current state
     @property
     def chunks(self):
