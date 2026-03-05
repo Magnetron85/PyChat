@@ -1422,35 +1422,47 @@ class SimpleRAGManager:
                     if key in doc_chunk_lookup:
                         include_indices.add(doc_chunk_lookup[key])
 
-            # 2. Semantic neighbours (same document, SBERT cosine)
-            if has_sbert and center_arr is not None and doc_id in doc_chunks_map:
+            # 2. Semantic neighbours across ALL documents in the KB (SBERT cosine)
+            if has_sbert and center_arr is not None:
                 try:
                     center_vec = self.sbert_vectors[center_arr].reshape(1, -1)
-                    doc_indices = doc_chunks_map[doc_id]
 
-                    # Compute similarity to all chunks in same document
-                    doc_vecs = np.array([self.sbert_vectors[idx] for idx in doc_indices])
-                    sims = cosine_similarity(center_vec, doc_vecs).flatten()
+                    # Compare against every chunk in the knowledge base
+                    all_sims = cosine_similarity(center_vec, self.sbert_vectors).flatten()
 
                     # Pick top similar chunks (excluding those already included)
-                    for rank_idx in sims.argsort()[::-1]:
-                        if len(include_indices) >= (2 * window + 1) + 2:
-                            break  # limit extra semantic neighbours
-                        arr_idx = doc_indices[rank_idx]
-                        if arr_idx in include_indices:
+                    max_semantic = 2  # extra semantic neighbours to add
+                    added = 0
+                    for rank_idx in all_sims.argsort()[::-1]:
+                        if added >= max_semantic:
+                            break
+                        if rank_idx in include_indices:
                             continue
-                        if sims[rank_idx] >= 0.55:
-                            include_indices.add(arr_idx)
+                        if all_sims[rank_idx] >= 0.55:
+                            include_indices.add(rank_idx)
+                            added += 1
                 except Exception as e:
                     logger.debug(f"Semantic neighbour expansion skipped: {e}")
 
-            # Build content in document order
+            # Build content grouped by document, each group in chunk order
             valid = sorted(
-                idx for idx in include_indices
-                if idx < len(self.chunks) and self.chunks[idx]
+                (idx for idx in include_indices
+                 if idx < len(self.chunks) and self.chunks[idx]),
+                key=lambda idx: (
+                    self.chunk_metadata[idx]["document_id"],
+                    self.chunk_metadata[idx]["chunk_index"],
+                ),
             )
             if valid:
-                parts = [self.chunks[idx] for idx in valid]
+                parts = []
+                current_doc = None
+                for idx in valid:
+                    meta = self.chunk_metadata[idx]
+                    if meta["document_id"] != current_doc:
+                        current_doc = meta["document_id"]
+                        if parts:  # separator between documents
+                            parts.append(f"[Related content from: {meta['filename']}]")
+                    parts.append(self.chunks[idx])
                 result = dict(result)
                 result["content"] = "\n\n".join(parts)
 
