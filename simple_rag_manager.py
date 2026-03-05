@@ -54,15 +54,28 @@ class Document:
         }
 
 class DocumentChunker:
-    """Semantic-aware document chunker that splits on content boundaries.
+    """Semantic-aware document chunker that uses SBERT to detect topic shifts.
 
-    Instead of blindly cutting at fixed character offsets, this chunker
-    respects paragraph breaks, section headers, slide/sheet markers, and
-    sentence boundaries.  Each chunk contains complete semantic units (whole
-    paragraphs / sections) and stays within a configurable size range.
+    Chunking strategy (layered, from coarse to fine):
+
+    1. **Hard structural boundaries** – paragraph breaks, headings, slide/sheet
+       markers always start a new segment.
+    2. **SBERT topic-shift detection** – within each structural segment that
+       exceeds *target_size*, sentences are embedded with the SBERT model and
+       cosine similarity between consecutive sentences is measured.  A drop
+       below *similarity_threshold* signals a topic change and forces a chunk
+       boundary.  This means a dense technical section stays together even if
+       it's long, while an abrupt topic change mid-paragraph creates a split.
+    3. **Size guardrails** – chunks are kept within *min_size* .. *max_size*.
+       Tiny segments are merged with neighbours; huge segments that can't be
+       split semantically fall back to sentence-level or character-level cuts.
+
+    When no SBERT model is provided the chunker falls back to purely
+    structural + sentence-boundary splitting (still much better than fixed
+    character offsets).
     """
 
-    # Patterns that indicate a strong section boundary
+    # Patterns that indicate a hard section boundary
     _SECTION_BREAK = re.compile(
         r'\n{2,}'                             # double+ newline (paragraph break)
         r'|(?<=\n)(?=#{1,6}\s)'               # markdown heading
@@ -71,13 +84,24 @@ class DocumentChunker:
         r'|(?<=\n)(?=Chapter\s|\bSection\s)'   # explicit chapter / section label
     )
 
-    def __init__(self, target_size: int = 1500, min_size: int = 200, max_size: int = 3000):
+    _SENTENCE_RE = re.compile(r'(?<=[.!?])\s+')
+
+    def __init__(
+        self,
+        target_size: int = 1500,
+        min_size: int = 200,
+        max_size: int = 3000,
+        sbert_model=None,
+        similarity_threshold: float = 0.35,
+    ):
         self.target_size = target_size
         self.min_size = min_size
         self.max_size = max_size
+        self.sbert_model = sbert_model          # optional SentenceTransformer instance
+        self.similarity_threshold = similarity_threshold
 
     # -----------------------------------------------------------------
-    # Public API (same interface as the old chunker)
+    # Public API
     # -----------------------------------------------------------------
     def chunk_document(self, document: Document) -> Document:
         """Split document content into semantically coherent chunks."""
@@ -86,11 +110,19 @@ class DocumentChunker:
             document.chunks = []
             return document
 
-        # Step 1 – split into semantic segments (paragraphs / sections)
+        # Step 1 – hard structural split (paragraphs, headings, slides …)
         segments = self._split_into_segments(content)
 
-        # Step 2 – merge small segments / split oversized ones to stay in range
-        chunks = self._merge_segments(segments)
+        # Step 2 – within oversized segments, apply SBERT topic-shift detection
+        refined: List[str] = []
+        for seg in segments:
+            if len(seg) > self.target_size:
+                refined.extend(self._split_segment_semantically(seg))
+            else:
+                refined.append(seg)
+
+        # Step 3 – merge tiny segments / enforce size limits
+        chunks = self._merge_segments(refined)
 
         document.chunks = chunks
         return document
@@ -99,20 +131,107 @@ class DocumentChunker:
     # Internal helpers
     # -----------------------------------------------------------------
     def _split_into_segments(self, text: str) -> List[str]:
-        """Split text on section / paragraph boundaries."""
+        """Split text on hard structural boundaries."""
         parts = self._SECTION_BREAK.split(text)
-        # Keep non-empty segments with their whitespace trimmed
         return [p.strip() for p in parts if p and p.strip()]
 
     def _split_on_sentences(self, text: str) -> List[str]:
-        """Best-effort sentence splitter for oversized segments."""
-        # Split on sentence-ending punctuation followed by whitespace
-        sentence_re = re.compile(r'(?<=[.!?])\s+')
-        parts = sentence_re.split(text)
+        """Best-effort sentence splitter."""
+        parts = self._SENTENCE_RE.split(text)
         return [p for p in parts if p and p.strip()]
 
+    def _split_segment_semantically(self, segment: str) -> List[str]:
+        """Split an oversized segment using SBERT topic-shift detection.
+
+        Falls back to sentence-boundary splitting when SBERT is unavailable.
+        """
+        sentences = self._split_on_sentences(segment)
+        if len(sentences) <= 1:
+            return [segment]  # can't split further
+
+        # --- SBERT path: detect topic shifts between consecutive sentences ---
+        if self.sbert_model is not None and len(sentences) >= 3:
+            try:
+                return self._sbert_topic_split(sentences)
+            except Exception as e:
+                logger.warning(f"SBERT topic splitting failed, falling back to size-based: {e}")
+
+        # --- Fallback: merge sentences up to target_size ---
+        return self._merge_sentences_by_size(sentences)
+
+    def _sbert_topic_split(self, sentences: List[str]) -> List[str]:
+        """Use SBERT cosine similarity to find topic boundaries."""
+        from sklearn.metrics.pairwise import cosine_similarity as cos_sim
+
+        embeddings = self.sbert_model.encode(sentences, convert_to_numpy=True)
+
+        # Compute similarity between each consecutive pair
+        similarities = []
+        for i in range(len(embeddings) - 1):
+            sim = cos_sim(
+                embeddings[i].reshape(1, -1),
+                embeddings[i + 1].reshape(1, -1),
+            )[0][0]
+            similarities.append(float(sim))
+
+        # Walk through sentences, splitting where similarity drops below
+        # the threshold AND the current chunk has reached a reasonable size
+        chunks: List[str] = []
+        current_parts: List[str] = [sentences[0]]
+        current_len = len(sentences[0])
+
+        for i, sim in enumerate(similarities):
+            sent = sentences[i + 1]
+            sent_len = len(sent)
+
+            # Decide whether to split here
+            is_topic_shift = sim < self.similarity_threshold
+            would_exceed_max = (current_len + sent_len) > self.max_size
+            past_target_and_shifting = (
+                is_topic_shift and current_len >= self.min_size
+            )
+
+            if would_exceed_max or past_target_and_shifting:
+                # Flush current chunk
+                chunks.append(" ".join(current_parts))
+                current_parts = [sent]
+                current_len = sent_len
+            else:
+                current_parts.append(sent)
+                current_len += sent_len
+
+        # Flush remaining
+        if current_parts:
+            remainder = " ".join(current_parts)
+            if len(remainder) >= self.min_size or not chunks:
+                chunks.append(remainder)
+            else:
+                chunks[-1] = chunks[-1] + " " + remainder
+
+        return chunks
+
+    def _merge_sentences_by_size(self, sentences: List[str]) -> List[str]:
+        """Merge sentences into chunks respecting target_size (no SBERT)."""
+        chunks: List[str] = []
+        sub_parts: List[str] = []
+        sub_len = 0
+        for sent in sentences:
+            if sub_len + len(sent) > self.target_size and sub_parts:
+                chunks.append(" ".join(sub_parts))
+                sub_parts = []
+                sub_len = 0
+            sub_parts.append(sent)
+            sub_len += len(sent)
+        if sub_parts:
+            remainder = " ".join(sub_parts)
+            if len(remainder) >= self.min_size or not chunks:
+                chunks.append(remainder)
+            else:
+                chunks[-1] = chunks[-1] + " " + remainder
+        return chunks
+
     def _merge_segments(self, segments: List[str]) -> List[str]:
-        """Merge small segments together and split oversized ones."""
+        """Merge small segments together and enforce size guardrails."""
         chunks: List[str] = []
         current_parts: List[str] = []
         current_len = 0
@@ -124,7 +243,6 @@ class DocumentChunker:
                 if len(merged) >= self.min_size:
                     chunks.append(merged)
                 elif chunks:
-                    # Too small on its own – attach to previous chunk
                     chunks[-1] = chunks[-1] + "\n\n" + merged
                 else:
                     chunks.append(merged)
@@ -134,38 +252,15 @@ class DocumentChunker:
         for seg in segments:
             seg_len = len(seg)
 
-            # Oversized single segment – split on sentences first
+            # Still oversized after semantic splitting (edge case) – fixed-size fallback
             if seg_len > self.max_size:
                 _flush()
-                sentences = self._split_on_sentences(seg)
-                if len(sentences) <= 1:
-                    # Can't split further – use fixed-size fallback for this segment only
-                    for i in range(0, seg_len, self.target_size - 200):
-                        sub = seg[i:i + self.target_size]
-                        if len(sub) >= self.min_size:
-                            chunks.append(sub)
-                else:
-                    # Re-merge sentences into target-sized chunks
-                    sub_parts: List[str] = []
-                    sub_len = 0
-                    for sent in sentences:
-                        if sub_len + len(sent) > self.target_size and sub_parts:
-                            chunks.append(" ".join(sub_parts))
-                            sub_parts = []
-                            sub_len = 0
-                        sub_parts.append(sent)
-                        sub_len += len(sent)
-                    if sub_parts:
-                        remainder = " ".join(sub_parts)
-                        if len(remainder) >= self.min_size:
-                            chunks.append(remainder)
-                        elif chunks:
-                            chunks[-1] = chunks[-1] + " " + remainder
-                        else:
-                            chunks.append(remainder)
+                for i in range(0, seg_len, self.target_size - 200):
+                    sub = seg[i:i + self.target_size]
+                    if len(sub) >= self.min_size:
+                        chunks.append(sub)
                 continue
 
-            # Would adding this segment exceed target?
             if current_len + seg_len > self.target_size and current_parts:
                 _flush()
 
@@ -390,19 +485,18 @@ class SimpleRAGManager:
                  sbert_model: str = "all-MiniLM-L6-v2",
                  knowledge_base: str = "default"):
         self.db_path = db_path
-        self.chunker = DocumentChunker()
         self.knowledge_base = knowledge_base
-        
+
         # Second-stage retrieval with Sentence-BERT (optional)
         self.use_sbert = use_sbert
         self.sbert_model = None
-        
+
         # Knowledge base state cache
         self.kb_states = {}
-        
+
         # Initialize the current state
         self.current_state = self._create_empty_state()
-        
+
         # Only initialize SBERT if requested and available
         if self.use_sbert:
             try:
@@ -413,6 +507,9 @@ class SimpleRAGManager:
                 logger.error(f"Error initializing Sentence-BERT: {str(e)}")
                 logger.warning("Falling back to TF-IDF only mode")
                 self.use_sbert = False
+
+        # Create chunker – pass SBERT model for semantic topic-shift detection
+        self.chunker = DocumentChunker(sbert_model=self.sbert_model)
         
         # Set up SQLite database for document metadata and content
         self._init_db()
