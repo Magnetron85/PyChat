@@ -1370,45 +1370,90 @@ class SimpleRAGManager:
             return []
 
     def _expand_with_adjacent_chunks(self, results: List[Dict[str, Any]], window: int = 1) -> List[Dict[str, Any]]:
-        """Expand each result by including adjacent chunks from the same document.
+        """Expand each result with positionally adjacent AND semantically similar chunks.
 
-        This gives the LLM more coherent context around each matched chunk.
-        Adjacent chunks are prepended/appended in document order and clearly
-        separated so the model can distinguish the core match from surrounding
-        context.
+        For each matched chunk this method gathers:
+        1. **Positionally adjacent** chunks (±window) from the same document –
+           gives the LLM surrounding context.
+        2. **Semantically similar** chunks from the same document that may be
+           far away in the text but cover the same topic.  Uses SBERT cosine
+           similarity (if vectors are available) to find up to 2 extra related
+           chunks with similarity >= 0.55.
+
+        All gathered chunks are de-duplicated and ordered by their chunk_index
+        so the LLM sees them in document order.
 
         Args:
-            results: List of retrieval results (each with document_id, chunk_index, content)
-            window: Number of neighbouring chunks to include on each side (default 1)
+            results: Retrieval results (each with document_id, chunk_index, content)
+            window:  Positional neighbours on each side (default 1)
 
         Returns:
             Updated results list with expanded content
         """
-        if not results or window <= 0:
+        if not results:
             return results
 
-        # Build a lookup: (document_id, chunk_index) -> array index
+        # Build lookups
         doc_chunk_lookup: Dict[Tuple[str, int], int] = {}
+        doc_chunks_map: Dict[str, List[int]] = {}  # doc_id -> list of array indices
         for i, meta in enumerate(self.chunk_metadata):
-            doc_chunk_lookup[(meta["document_id"], meta["chunk_index"])] = i
+            key = (meta["document_id"], meta["chunk_index"])
+            doc_chunk_lookup[key] = i
+            doc_chunks_map.setdefault(meta["document_id"], []).append(i)
+
+        has_sbert = (
+            self.sbert_vectors is not None
+            and len(self.sbert_vectors) == len(self.chunks)
+        )
 
         expanded = []
         for result in results:
             doc_id = result["document_id"]
             center_idx = result["chunk_index"]
+            center_arr = doc_chunk_lookup.get((doc_id, center_idx))
 
-            parts = []
-            for offset in range(-window, window + 1):
-                neighbour_idx = center_idx + offset
-                key = (doc_id, neighbour_idx)
-                if key in doc_chunk_lookup:
-                    arr_idx = doc_chunk_lookup[key]
-                    if arr_idx < len(self.chunks) and self.chunks[arr_idx]:
-                        parts.append(self.chunks[arr_idx])
+            # Collect array indices to include (set for dedup)
+            include_indices: set = set()
 
-            if parts:
-                result = dict(result)  # shallow copy
+            # 1. Positional neighbours
+            if window > 0:
+                for offset in range(-window, window + 1):
+                    key = (doc_id, center_idx + offset)
+                    if key in doc_chunk_lookup:
+                        include_indices.add(doc_chunk_lookup[key])
+
+            # 2. Semantic neighbours (same document, SBERT cosine)
+            if has_sbert and center_arr is not None and doc_id in doc_chunks_map:
+                try:
+                    center_vec = self.sbert_vectors[center_arr].reshape(1, -1)
+                    doc_indices = doc_chunks_map[doc_id]
+
+                    # Compute similarity to all chunks in same document
+                    doc_vecs = np.array([self.sbert_vectors[idx] for idx in doc_indices])
+                    sims = cosine_similarity(center_vec, doc_vecs).flatten()
+
+                    # Pick top similar chunks (excluding those already included)
+                    for rank_idx in sims.argsort()[::-1]:
+                        if len(include_indices) >= (2 * window + 1) + 2:
+                            break  # limit extra semantic neighbours
+                        arr_idx = doc_indices[rank_idx]
+                        if arr_idx in include_indices:
+                            continue
+                        if sims[rank_idx] >= 0.55:
+                            include_indices.add(arr_idx)
+                except Exception as e:
+                    logger.debug(f"Semantic neighbour expansion skipped: {e}")
+
+            # Build content in document order
+            valid = sorted(
+                idx for idx in include_indices
+                if idx < len(self.chunks) and self.chunks[idx]
+            )
+            if valid:
+                parts = [self.chunks[idx] for idx in valid]
+                result = dict(result)
                 result["content"] = "\n\n".join(parts)
+
             expanded.append(result)
 
         return expanded
